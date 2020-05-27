@@ -1,0 +1,1 @@
+# Code-used-for-Milk-quality-traits-predicted-from-routinely-available-milk-spectra-Paper-analyses
