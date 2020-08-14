@@ -1,0 +1,932 @@
+# Read in data if csv file 
+
+rm(list=ls())
+setwd("set direction")
+list.files()
+
+dataset = read.csv("file name.csv")
+
+# Read in data if xlsx
+
+library("readxl")
+dataset = read_excel("direction/file name.xlsx")
+
+
+# Clean the dataset
+#for editing part look at the regression analyses code
+
+library("pls")
+library(glmnet)  # for ridge regression
+library(dplyr)   # for data cleaning
+library(psych)   # for function tr() to compute trace of a matrix
+library(penalized)
+library(stats)
+
+#division of the traits in 4 folds
+
+fold1<- which(dataset$.folds==1)
+fold2<- which(dataset$.folds==2)
+fold3<- which(dataset$.folds==3)
+fold4<- which(dataset$.folds==4)
+
+#quatification of the quartiles values
+
+Q <- quantile(dataset$beta_lactoglobulin_b, probs=c(.25,.5, .75), na.rm = T)
+Q1 = as.numeric(Q[1])
+Q2 = as.numeric(Q[2])
+Q3 = as.numeric(Q[3])
+
+
+# Definition of classes trait
+dataset <- mutate(dataset, class = (ifelse(beta_lactoglobulin_b <= Q1, 1, 
+                                            (ifelse(beta_lactoglobulin_b <= Q2 & beta_lactoglobulin_b > Q1, 2,
+                                                    (ifelse(beta_lactoglobulin_b > Q3, 4, 3)))))))
+dataset$class <- as.factor(dataset$class)
+
+as.data.frame(table(dataset$class))
+
+
+## definition of a table where report the results
+R <- 4
+out <- matrix(NA, R, 16)
+colnames(out) <- c("pls.n", "acc","pls.n", "acc",
+                   "rf.n", "acc","rf.val.n", "acc",
+                   "bo.n", "acc","bo.val.n", "acc",
+                   "svm.n", "acc","svm.val.n", "acc")
+
+
+###############################################################################
+#############################dataset1#########################################
+# Division in train and test
+
+training<-data.frame(dataset[-fold1,])
+testing<-data.frame(dataset[fold1,])
+
+
+# Generic code set up
+y.train = training$class
+x.train = as.matrix(training[,61:591])
+train = cbind(y.train, x.train)
+y.test = testing$class
+x.test = as.data.frame(testing[,61:591])
+test = cbind(y.test, x.test)
+train <- as.data.frame(train)
+test <- as.data.frame(test)
+names(train)[1] <- "binary"
+names(test)[1] <- "binary"
+y.train <- as.factor(y.train)
+y.test <- as.factor(y.test)
+train$binary <- as.factor(train$binary)
+test$binary <- as.factor(test$binary)
+
+library(mclust)
+library(caret)
+library(pROC)
+
+#######################################################################################
+########################## Apply PLS DA#########################################
+
+plsda.model <- plsda(x.train, y.train, ncomp = 2, probMethod = "bayes")
+yhat_plsda <- predict (plsda.model , newdata= x.train)   #predict yhat
+yhat_plsda_test <- predict (plsda.model , newdata= x.test)   #predict yhat
+
+
+##measures of accuracy cross validation##
+
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_plsda #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- (table(x,y))
+
+out[1,1] <- length(x)
+out[1,2] <- sum(diag(table.pls))/sum(table.pls)
+
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_plsda_test #values of the predicted eg fat_predicted#
+
+##
+table.pls <- (table(x,y))
+
+out[1,3] <- length(x)
+out[1,4] <-sum(diag(table.pls))/sum(table.pls)
+
+#############################################################################
+########################## Apply Random Forest###############################
+library(randomForest)
+
+##train the model
+y.train <- as.factor(y.train)
+RF_mod <- randomForest (x= x.train, y= y.train, ntree = 500, mtry =23)   #model code
+
+## predict y
+yhat_RF <- predict (RF_mod , newdata= x.train)           #predict yhat CV
+yhat_RF <- as.matrix(yhat_RF)
+yhat_RF <- as.vector(yhat_RF)
+yhat_RF_test <- predict (RF_mod , newdata = x.test) #predict yhat EV
+yhat_RF_test <- as.matrix(yhat_RF_test)
+yhat_RF_test <- as.vector(yhat_RF_test)
+
+##measures of accuracy in cross validation##
+
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_RF #values of the predicted eg fat_predicted#
+
+##
+
+
+table.pls <-(table(x,y))
+
+out[1,5] <- length(x)
+out[1,6] <-sum(diag(table.pls))/sum(table.pls)
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_RF_test #values of the predicted eg fat_predicted#
+
+##
+table.pls <-(table(x,y))
+
+out[1,7] <- length(x)
+out[1,8] <-sum(diag(table.pls))/sum(table.pls)
+############################################################################################
+############################## Boosting ####################################################
+
+library(gbm)
+##train the model
+boost2_mod <- gbm(binary ~.,data = train,n.trees = 500,
+                  shrinkage = 0.01, interaction.depth = 4)  
+
+Xnew1 <- as.data.frame(x.train)
+Xnew1_test <- as.data.frame(x.test)
+yhat1_boosting<-predict.gbm(boost2_mod,Xnew1,n.trees = 500, type="response")             #predict y hat
+yhat1_test_boosting<-predict.gbm(boost2_mod,Xnew1_test,n.trees = 500, type="response")   #predict y hat from test dataset
+
+yhat1_boosting <- as.data.frame(yhat1_boosting)
+n <- nrow(yhat1_boosting)
+names(yhat1_boosting)[1] <- "class1"
+names(yhat1_boosting)[2] <- "class2"
+names(yhat1_boosting)[3] <- "class3"
+names(yhat1_boosting)[4] <- "class4"
+yhat_boosting <- matrix(NA, n, 1)
+
+for ( i in 1:n) {
+  row1 <- yhat1_boosting[i,]
+  row2 <- which.max(row1)
+  yhat_boosting[i,] <- (ifelse(row2 ==1, 1, 
+                               (ifelse(row2==2,2,
+                                       (ifelse(row2==3, 3, 
+                                               (ifelse(row2==4,4, NA))))))))
+  
+}
+
+yhat1_test_boosting <- as.data.frame(yhat1_test_boosting)
+n <- nrow(yhat1_test_boosting)
+names(yhat1_test_boosting)[1] <- "class1"
+names(yhat1_test_boosting)[2] <- "class2"
+names(yhat1_test_boosting)[3] <- "class3"
+names(yhat1_test_boosting)[4] <- "class4"
+yhat_test_boosting <- matrix(NA, n, 1)
+
+for ( i in 1:n) {
+  row1 <- yhat1_test_boosting[i,]
+  row2 <- which.max(row1)
+  yhat_test_boosting[i,] <- (ifelse(row2 ==1, 1, 
+                                    (ifelse(row2==2,2,
+                                            (ifelse(row2==3, 3, 
+                                                    (ifelse(row2==4,4, NA))))))))
+  
+}
+##measures of accuracy in cross validation##
+
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_boosting #values of the predicted eg fat_predicted#
+
+##
+
+
+table.pls <- (table(x,y))
+
+out[1,9] <- length(x)
+out[1,10] <-sum(diag(table.pls))/sum(table.pls)
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_test_boosting #values of the predicted eg fat_predicted#
+
+##
+table.pls <- (table(x,y))
+
+out[1,11] <- length(x)
+out[1,12] <-sum(diag(table.pls))/sum(table.pls)
+###########################################################################################
+############################Support Vector Machine SVM#####################################
+library(e1071)
+
+classifier = svm(formula = binary ~.,  data = train, 
+                 type = 'C-classification', 
+                 kernel = 'linear')
+y_pred = predict(classifier, newdata = x.train)
+y_pred1 = predict(classifier, newdata = x.test)
+
+
+##measures of accuracy in cross validation##
+
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= y_pred #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- (table(x,y))
+
+out[1,13] <- length(x)
+out[1,14] <-sum(diag(table.pls))/sum(table.pls)
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= y_pred1 #values of the predicted eg fat_predicted#
+
+##
+table.pls <- (table(x,y))
+
+out[1,15] <- length(x)
+out[1,16] <-sum(diag(table.pls))/sum(table.pls)
+
+
+#######################################################################################
+#############################dataset2#########################################
+# Division in train and test
+
+training<-data.frame(dataset[-fold2,])
+testing<-data.frame(dataset[fold2,])
+
+
+# Generic code set up
+y.train = training$class
+x.train = as.matrix(training[,61:591])
+train = cbind(y.train, x.train)
+y.test = testing$class
+x.test = as.data.frame(testing[,61:591])
+test = cbind(y.test, x.test)
+train <- as.data.frame(train)
+test <- as.data.frame(test)
+names(train)[1] <- "binary"
+names(test)[1] <- "binary"
+y.train <- as.factor(y.train)
+y.test <- as.factor(y.test)
+train$binary <- as.factor(train$binary)
+test$binary <- as.factor(test$binary)
+
+#######################################################################################
+########################## Apply PLS DA#########################################
+
+plsda.model <- plsda(x.train, y.train, ncomp = 2, probMethod = "bayes")
+yhat_plsda <- predict (plsda.model , newdata= x.train)   #predict yhat
+yhat_plsda_test <- predict (plsda.model , newdata= x.test)   #predict yhat
+
+
+##measures of accuracy cross validation##
+
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_plsda #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- (table(x,y))
+
+out[2,1] <- length(x)
+out[2,2] <-sum(diag(table.pls))/sum(table.pls)
+
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_plsda_test #values of the predicted eg fat_predicted#
+
+##
+table.pls <- (table(x,y))
+
+out[2,3] <- length(x)
+out[2,4] <-sum(diag(table.pls))/sum(table.pls)
+
+
+
+#############################################################################
+########################## Apply Random Forest###############################
+library(randomForest)
+
+##train the model
+y.train <- as.factor(y.train)
+RF_mod <- randomForest (x= x.train, y= y.train, ntree = 500, mtry =23)   #model code
+
+## predict y
+yhat_RF <- predict (RF_mod , newdata= x.train)           #predict yhat CV
+yhat_RF <- as.matrix(yhat_RF)
+yhat_RF <- as.vector(yhat_RF)
+yhat_RF_test <- predict (RF_mod , newdata = x.test) #predict yhat EV
+yhat_RF_test <- as.matrix(yhat_RF_test)
+yhat_RF_test <- as.vector(yhat_RF_test)
+
+##measures of accuracy in cross validation##
+
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_RF #values of the predicted eg fat_predicted#
+
+##
+
+
+table.pls <- (table(x,y))
+
+out[2,5] <- length(x)
+out[2,6] <-sum(diag(table.pls))/sum(table.pls)
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_RF_test #values of the predicted eg fat_predicted#
+
+##
+table.pls <- (table(x,y))
+
+out[2,7] <- length(x)
+out[2,8] <-sum(diag(table.pls))/sum(table.pls)
+############################################################################################
+############################## Boosting ####################################################
+
+library(gbm)
+##train the model
+boost2_mod <- gbm(binary ~.,data = train,n.trees = 500,
+                  shrinkage = 0.01, interaction.depth = 4)  
+
+Xnew1 <- as.data.frame(x.train)
+Xnew1_test <- as.data.frame(x.test)
+yhat1_boosting<-predict.gbm(boost2_mod,Xnew1,n.trees = 500, type="response")             #predict y hat
+yhat1_test_boosting<-predict.gbm(boost2_mod,Xnew1_test,n.trees = 500, type="response")   #predict y hat from test dataset
+
+yhat1_boosting <- as.data.frame(yhat1_boosting)
+n <- nrow(yhat1_boosting)
+names(yhat1_boosting)[1] <- "class1"
+names(yhat1_boosting)[2] <- "class2"
+names(yhat1_boosting)[3] <- "class3"
+names(yhat1_boosting)[4] <- "class4"
+yhat_boosting <- matrix(NA, n, 1)
+
+for ( i in 1:n) {
+  row1 <- yhat1_boosting[i,]
+  row2 <- which.max(row1)
+  yhat_boosting[i,] <- (ifelse(row2 ==1, 1, 
+                               (ifelse(row2==2,2,
+                                       (ifelse(row2==3, 3, 
+                                               (ifelse(row2==4,4, NA))))))))
+  
+}
+
+yhat1_test_boosting <- as.data.frame(yhat1_test_boosting)
+n <- nrow(yhat1_test_boosting)
+names(yhat1_test_boosting)[1] <- "class1"
+names(yhat1_test_boosting)[2] <- "class2"
+names(yhat1_test_boosting)[3] <- "class3"
+names(yhat1_test_boosting)[4] <- "class4"
+yhat_test_boosting <- matrix(NA, n, 1)
+
+for ( i in 1:n) {
+  row1 <- yhat1_test_boosting[i,]
+  row2 <- which.max(row1)
+  yhat_test_boosting[i,] <- (ifelse(row2 ==1, 1, 
+                                    (ifelse(row2==2,2,
+                                            (ifelse(row2==3, 3, 
+                                                    (ifelse(row2==4,4, NA))))))))
+  
+}
+##measures of accuracy in cross validation##
+
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_boosting #values of the predicted eg fat_predicted#
+
+##
+
+
+table.pls <- (table(x,y))
+
+out[2,9] <- length(x)
+out[2,10] <-sum(diag(table.pls))/sum(table.pls)
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_test_boosting #values of the predicted eg fat_predicted#
+
+##
+table.pls <- (table(x,y))
+
+out[2,11] <- length(x)
+out[2,12] <-sum(diag(table.pls))/sum(table.pls)
+###########################################################################################
+############################Support Vector Machine SVM#####################################
+library(e1071)
+
+classifier = svm(formula = binary ~.,  data = train, 
+                 type = 'C-classification', 
+                 kernel = 'linear')
+y_pred = predict(classifier, newdata = x.train)
+y_pred1 = predict(classifier, newdata = x.test)
+
+
+##measures of accuracy in cross validation##
+
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= y_pred #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- (table(x,y))
+
+out[2,13] <- length(x)
+out[2,14] <-sum(diag(table.pls))/sum(table.pls)
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= y_pred1 #values of the predicted eg fat_predicted#
+
+##
+table.pls <- (table(x,y))
+
+out[2,15] <- length(x)
+out[2,16] <-sum(diag(table.pls))/sum(table.pls)
+
+
+#######################################################################################
+#############################dataset3#########################################
+# Division in train and test
+
+training<-data.frame(dataset[-fold3,])
+testing<-data.frame(dataset[fold3,])
+
+
+# Generic code set up
+y.train = training$class
+x.train = as.matrix(training[,61:591])
+train = cbind(y.train, x.train)
+y.test = testing$class
+x.test = as.data.frame(testing[,61:591])
+test = cbind(y.test, x.test)
+train <- as.data.frame(train)
+test <- as.data.frame(test)
+names(train)[1] <- "binary"
+names(test)[1] <- "binary"
+y.train <- as.factor(y.train)
+y.test <- as.factor(y.test)
+train$binary <- as.factor(train$binary)
+test$binary <- as.factor(test$binary)
+
+#######################################################################################
+########################## Apply PLS DA#########################################
+
+plsda.model <- plsda(x.train, y.train, ncomp = 2, probMethod = "bayes")
+yhat_plsda <- predict (plsda.model , newdata= x.train)   #predict yhat
+yhat_plsda_test <- predict (plsda.model , newdata= x.test)   #predict yhat
+
+
+##measures of accuracy cross validation##
+
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_plsda #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- (table(x,y))
+
+out[3,1] <- length(x)
+out[3,2] <-sum(diag(table.pls))/sum(table.pls)
+
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_plsda_test #values of the predicted eg fat_predicted#
+
+##
+table.pls <- (table(x,y))
+
+out[3,3] <- length(x)
+out[3,4] <-sum(diag(table.pls))/sum(table.pls)
+
+
+#############################################################################
+########################## Apply Random Forest###############################
+
+##train the model
+y.train <- as.factor(y.train)
+RF_mod <- randomForest (x= x.train, y= y.train, ntree = 500, mtry =23)   #model code
+
+## predict y
+yhat_RF <- predict (RF_mod , newdata= x.train)           #predict yhat CV
+yhat_RF <- as.matrix(yhat_RF)
+yhat_RF <- as.vector(yhat_RF)
+yhat_RF_test <- predict (RF_mod , newdata = x.test) #predict yhat EV
+yhat_RF_test <- as.matrix(yhat_RF_test)
+yhat_RF_test <- as.vector(yhat_RF_test)
+
+##measures of accuracy in cross validation##
+
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_RF #values of the predicted eg fat_predicted#
+
+##
+
+
+table.pls <- (table(x,y))
+
+out[3,5] <- length(x)
+out[3,6] <-sum(diag(table.pls))/sum(table.pls)
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_RF_test #values of the predicted eg fat_predicted#
+
+##
+table.pls <- (table(x,y))
+
+out[3,7] <- length(x)
+out[3,8] <-sum(diag(table.pls))/sum(table.pls)
+############################################################################################
+############################## Boosting ####################################################
+
+##train the model
+boost2_mod <- gbm(binary ~.,data = train,n.trees = 500,
+                  shrinkage = 0.01, interaction.depth = 4)  
+
+Xnew1 <- as.data.frame(x.train)
+Xnew1_test <- as.data.frame(x.test)
+yhat1_boosting<-predict.gbm(boost2_mod,Xnew1,n.trees = 500, type="response")             #predict y hat
+yhat1_test_boosting<-predict.gbm(boost2_mod,Xnew1_test,n.trees = 500, type="response")   #predict y hat from test dataset
+
+yhat1_boosting <- as.data.frame(yhat1_boosting)
+n <- nrow(yhat1_boosting)
+names(yhat1_boosting)[1] <- "class1"
+names(yhat1_boosting)[2] <- "class2"
+names(yhat1_boosting)[3] <- "class3"
+names(yhat1_boosting)[4] <- "class4"
+yhat_boosting <- matrix(NA, n, 1)
+
+for ( i in 1:n) {
+  row1 <- yhat1_boosting[i,]
+  row2 <- which.max(row1)
+  yhat_boosting[i,] <- (ifelse(row2 ==1, 1, 
+                               (ifelse(row2==2,2,
+                                       (ifelse(row2==3, 3, 
+                                               (ifelse(row2==4,4, NA))))))))
+  
+}
+
+yhat1_test_boosting <- as.data.frame(yhat1_test_boosting)
+n <- nrow(yhat1_test_boosting)
+names(yhat1_test_boosting)[1] <- "class1"
+names(yhat1_test_boosting)[2] <- "class2"
+names(yhat1_test_boosting)[3] <- "class3"
+names(yhat1_test_boosting)[4] <- "class4"
+yhat_test_boosting <- matrix(NA, n, 1)
+
+for ( i in 1:n) {
+  row1 <- yhat1_test_boosting[i,]
+  row2 <- which.max(row1)
+  yhat_test_boosting[i,] <- (ifelse(row2 ==1, 1, 
+                                    (ifelse(row2==2,2,
+                                            (ifelse(row2==3, 3, 
+                                                    (ifelse(row2==4,4, NA))))))))
+  
+}
+##measures of accuracy in cross validation##
+
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_boosting #values of the predicted eg fat_predicted#
+
+##
+
+
+table.pls <- (table(x,y))
+
+out[3,9] <- length(x)
+out[3,10] <-sum(diag(table.pls))/sum(table.pls)
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_test_boosting #values of the predicted eg fat_predicted#
+
+##
+table.pls <- (table(x,y))
+
+out[3,11] <- length(x)
+out[3,12] <-sum(diag(table.pls))/sum(table.pls)
+###########################################################################################
+############################Support Vector Machine SVM#####################################
+
+classifier = svm(formula = binary ~.,  data = train, 
+                 type = 'C-classification', 
+                 kernel = 'linear')
+y_pred = predict(classifier, newdata = x.train)
+y_pred1 = predict(classifier, newdata = x.test)
+
+
+##measures of accuracy in cross validation##
+
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= y_pred #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- (table(x,y))
+
+out[3,13] <- length(x)
+out[3,14] <-sum(diag(table.pls))/sum(table.pls)
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= y_pred1 #values of the predicted eg fat_predicted#
+
+##
+table.pls <- (table(x,y))
+
+out[3,15] <- length(x)
+out[3,16] <-sum(diag(table.pls))/sum(table.pls)
+
+#######################################################################################
+#############################dataset4#########################################
+# Division in train and test
+
+training<-data.frame(dataset[-fold4,])
+testing<-data.frame(dataset[fold4,])
+
+
+# Generic code set up
+y.train = training$class
+x.train = as.matrix(training[,61:591])
+train = cbind(y.train, x.train)
+y.test = testing$class
+x.test = as.data.frame(testing[,61:591])
+test = cbind(y.test, x.test)
+train <- as.data.frame(train)
+test <- as.data.frame(test)
+names(train)[1] <- "binary"
+names(test)[1] <- "binary"
+y.train <- as.factor(y.train)
+y.test <- as.factor(y.test)
+train$binary <- as.factor(train$binary)
+test$binary <- as.factor(test$binary)
+
+#######################################################################################
+########################## Apply PLS DA#########################################
+
+plsda.model <- plsda(x.train, y.train, ncomp = 2, probMethod = "bayes")
+yhat_plsda <- predict (plsda.model , newdata= x.train)   #predict yhat
+yhat_plsda_test <- predict (plsda.model , newdata= x.test)   #predict yhat
+
+
+##measures of accuracy cross validation##
+
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_plsda #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- (table(x,y))
+
+out[4,1] <- length(x)
+out[4,2] <-sum(diag(table.pls))/sum(table.pls)
+
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_plsda_test #values of the predicted eg fat_predicted#
+
+##
+table.pls <- (table(x,y))
+
+out[4,3] <- length(x)
+out[4,4] <-sum(diag(table.pls))/sum(table.pls)
+
+#############################################################################
+########################## Apply Random Forest###############################
+library(randomForest)
+
+##train the model
+y.train <- as.factor(y.train)
+RF_mod <- randomForest (x= x.train, y= y.train, ntree = 500, mtry =23)   #model code
+
+## predict y
+yhat_RF <- predict (RF_mod , newdata= x.train)           #predict yhat CV
+yhat_RF <- as.matrix(yhat_RF)
+yhat_RF <- as.vector(yhat_RF)
+yhat_RF_test <- predict (RF_mod , newdata = x.test) #predict yhat EV
+yhat_RF_test <- as.matrix(yhat_RF_test)
+yhat_RF_test <- as.vector(yhat_RF_test)
+
+##measures of accuracy in cross validation##
+
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_RF #values of the predicted eg fat_predicted#
+
+##
+
+
+table.pls <- (table(x,y))
+
+out[4,5] <- length(x)
+out[4,6] <-sum(diag(table.pls))/sum(table.pls)
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_RF_test #values of the predicted eg fat_predicted#
+
+##
+table.pls <- (table(x,y))
+
+out[4,7] <- length(x)
+out[4,8] <-sum(diag(table.pls))/sum(table.pls)
+############################################################################################
+############################## Boosting ####################################################
+
+##train the model
+boost2_mod <- gbm(binary ~.,data = train,n.trees = 500,
+                  shrinkage = 0.01, interaction.depth = 4)  
+
+Xnew1 <- as.data.frame(x.train)
+Xnew1_test <- as.data.frame(x.test)
+yhat1_boosting<-predict.gbm(boost2_mod,Xnew1,n.trees = 500, type="response")             #predict y hat
+yhat1_test_boosting<-predict.gbm(boost2_mod,Xnew1_test,n.trees = 500, type="response")   #predict y hat from test dataset
+
+yhat1_boosting <- as.data.frame(yhat1_boosting)
+n <- nrow(yhat1_boosting)
+names(yhat1_boosting)[1] <- "class1"
+names(yhat1_boosting)[2] <- "class2"
+names(yhat1_boosting)[3] <- "class3"
+names(yhat1_boosting)[4] <- "class4"
+yhat_boosting <- matrix(NA, n, 1)
+
+for ( i in 1:n) {
+  row1 <- yhat1_boosting[i,]
+  row2 <- which.max(row1)
+  yhat_boosting[i,] <- (ifelse(row2 ==1, 1, 
+                               (ifelse(row2==2,2,
+                                       (ifelse(row2==3, 3, 
+                                               (ifelse(row2==4,4, NA))))))))
+  
+}
+
+yhat1_test_boosting <- as.data.frame(yhat1_test_boosting)
+n <- nrow(yhat1_test_boosting)
+names(yhat1_test_boosting)[1] <- "class1"
+names(yhat1_test_boosting)[2] <- "class2"
+names(yhat1_test_boosting)[3] <- "class3"
+names(yhat1_test_boosting)[4] <- "class4"
+yhat_test_boosting <- matrix(NA, n, 1)
+
+for ( i in 1:n) {
+  row1 <- yhat1_test_boosting[i,]
+  row2 <- which.max(row1)
+  yhat_test_boosting[i,] <- (ifelse(row2 ==1, 1, 
+                                    (ifelse(row2==2,2,
+                                            (ifelse(row2==3, 3, 
+                                                    (ifelse(row2==4,4, NA))))))))
+  
+}
+##measures of accuracy in cross validation##
+
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_boosting #values of the predicted eg fat_predicted#
+
+##
+
+
+table.pls <- (table(x,y))
+
+out[4,9] <- length(x)
+out[4,10] <-sum(diag(table.pls))/sum(table.pls)
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_test_boosting #values of the predicted eg fat_predicted#
+
+##
+table.pls <- (table(x,y))
+
+out[4,11] <- length(x)
+out[4,12] <-sum(diag(table.pls))/sum(table.pls)
+###########################################################################################
+############################Support Vector Machine SVM#####################################
+
+classifier = svm(formula = binary ~.,  data = train, 
+                 type = 'C-classification', 
+                 kernel = 'linear')
+y_pred = predict(classifier, newdata = x.train)
+y_pred1 = predict(classifier, newdata = x.test)
+
+
+##measures of accuracy in cross validation##
+
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= y_pred #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- (table(x,y))
+
+out[4,13] <- length(x)
+out[4,14] <-sum(diag(table.pls))/sum(table.pls)
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= y_pred1 #values of the predicted eg fat_predicted#
+
+##
+table.pls <- (table(x,y))
+
+out[4,15] <- length(x)
+out[4,16] <-sum(diag(table.pls))/sum(table.pls)
+
+#########################################################################################
+######################results#############################################################
+
+apply(out, 2, summary)
+boxplot(out)
+apply(out, 2, sd)
+
+out <- as.data.frame(out)
+
+library("writexl")
+write_xlsx(out,"direction/file name.xlsx")
