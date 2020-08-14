@@ -1,0 +1,4491 @@
+# Set the direction where to find the dataset to be imported
+
+# Read in data if csv
+rm(list=ls())
+setwd("set direction")
+list.files()
+dataset = read.csv("XXX.csv")
+
+# Read in data if xlsx
+
+library("readxl")
+dataset = read_excel("direction where to find the file/file name.xlsx")
+
+#load library necessary for the analyses
+
+library("pls")
+library(glmnet)  # for ridge regression
+library(dplyr)   # for data cleaning
+library(psych)   # for function tr() to compute trace of a matrix
+library(penalized)
+
+
+## clean from outliers
+
+library(stats)
+##define the trait of interest (name present in the dataset) to analyse and remove the Na
+
+#if necessary, delete the 0s
+dataset$beta_lactoglobulin_b <- ifelse(dataset$beta_lactoglobulin_b == 0, NA, dataset$beta_lactoglobulin_b)
+
+trait = "beta_lactoglobulin_b"
+dataset <- dataset[complete.cases(dataset[ , trait]),]
+trait= dataset$beta_lactoglobulin_b
+
+x = trait
+meanx = mean(x)
+sdx = sd(x)
+up <- meanx + sdx*3
+low <- meanx - sdx*3
+x[x < low] <- NA
+x[x > up] <- NA
+trait = x
+
+dataset$beta_lactoglobulin_b = x
+trait = "beta_lactoglobulin_b"
+dataset <- dataset[complete.cases(dataset[ , trait]),]
+
+#information about the trait after editing
+trait = dataset$beta_lactoglobulin_b
+length(trait)
+mean(trait)
+sd(trait)
+median(trait)
+min(trait)
+max(trait)
+
+
+trait = "beta_lactoglobulin_b"
+#division of the data in 4 groups for 4-fold cross-validation
+
+library(groupdata2)
+set.seed(1234)
+train.fold <- fold(
+  dataset,
+  k = 4,
+  num_col = trait,
+  method = "n_dist")
+
+
+fold1<- which(train.fold$.folds==1)
+fold2<- which(train.fold$.folds==2)
+fold3<- which(train.fold$.folds==3)
+fold4<- which(train.fold$.folds==4)
+
+#save a dataset for each trait
+library("writexl")
+write_xlsx(train.fold,"C:/Users/Utente/Desktop/lavoro teagasc/paper 1/data/final datasets per trait/beta lactoglobulin b.xlsx")
+
+# Generic code set up
+y.train = dataset$Native_pH            #vector of the reference data
+x.train = as.matrix(dataset[,61:591])     #matrix of the spectra
+
+train = cbind(y.train, x.train)
+train <- as.data.frame(train)
+
+## definition of a table where results are going to be reported
+
+R <- 4                               #number of n-fold cross validation
+out <- matrix(NA, R, 110)             #number of output columns
+colnames(out) <- c("plsr.n", "RMSE", "r", "n","bias", "RMSECV", "r", "Slope", "SE.slope", "RPIQ",
+                   "ridge.n", "RMSE", "r", "n","bias", "RMSECV", "r", "Slope", "SE.slope", "RPIQ",
+                   "lasso.n", "RMSE", "r", "n","bias", "RMSECV", "r", "Slope", "SE.slope", "RPIQ",
+                   "en.n", "RMSE", "r", "n","bias", "RMSECV", "r", "Slope", "SE.slope", "RPIQ",
+                   "average.n", "RMSE", "r", "n","bias", "RMSECV", "r", "Slope", "SE.slope", "RPIQ",
+                   "pcr.n", "RMSE", "r", "n","bias", "RMSECV", "r", "Slope", "SE.slope", "RPIQ",
+                   "ppr.n", "RMSE", "r", "n","bias", "RMSECV", "r", "Slope", "SE.slope", "RPIQ",
+                   "ssr.n", "RMSE", "r", "n","bias", "RMSECV", "r", "Slope", "SE.slope", "RPIQ",
+                   "rf.n", "RMSE", "r", "n","bias", "RMSECV", "r", "Slope", "SE.slope", "RPIQ",
+                   "boosting.n", "RMSE", "r", "n","bias", "RMSECV", "r", "Slope", "SE.slope", "RPIQ",
+                   "brnn.n", "RMSE", "r", "n","bias", "RMSECV", "r", "Slope", "SE.slope", "RPIQ")
+
+
+##Following the algorithms are repeated 4 times, and every time a different 
+# fold as test dataset was considered
+
+##############################################################################
+############################################################################
+###############define x.train y.train x.test y.test based on the fold############
+x.train = as.matrix(train[-fold1,-1])    #matrix of spectra of the train dataset
+y.train = train[-fold1,1]                #vector of the trait of interest train dataset
+x.test = as.matrix(train[fold1,-1])      #matrix od spectra of the test dataset
+y.test= train [fold1,1]                  #vector of the trait of interest test dataset
+train1 <- as.data.frame(cbind(y.train, x.train))
+############################################################################################
+###################################### Apply PLS############################################
+library("pls")
+library(magrittr)
+library("parallel")
+library("yardstick")
+
+# Generic code set up: put training and test x and y data into data frames
+train.pls = data.frame(y = y.train)
+train.pls$x = x.train
+test.pls = data.frame(y = y.test)
+test.pls$x = x.test
+
+# Fit a PLS regression to the training data
+# Use multiple cores for the CV if available
+pls.options(parallel = makeCluster(detectCores(), type = "PSOCK"))
+res.pls = plsr(y ~ x, ncomp=20, data = train.pls, validation = "LOO", scale = TRUE)
+stopCluster(pls.options()$parallel)
+
+# Examine results through plots
+summary(res.pls)   
+plot(RMSEP(res.pls), legendpos = "topright",main="Fat Variable PLS")
+axis(side = 1, at=1:10)
+plot(res.pls, ncomp = 4, asp = 1, line = TRUE, main="4  Component Fit")
+plot(res.pls, plottype = "scores", comps = 1:4, main="Scores")
+plot(res.pls, "loadings", comps = 1:4, legendpos = "bottomright", xlab = "spectrum", main="Fat Dataset 1: PLS Components")
+abline(h = 0)
+
+#num.fact = selectNcomp(res.pls, method = c("onesigma"), ncomp = res.pls$ncomp)
+num.fact =13
+
+# Predict y hat in training
+y_hat_pls = predict(res.pls, ncomp = num.fact, newdata = train.pls$x)
+
+# Predict y hat in testing
+y_hat_pls_test1 = predict(res.pls, ncomp = num.fact, newdata = test.pls$x)
+
+##measures of accuracy
+##define X and Y
+
+x= y.train  #values of the character analysed eg fat_content#
+y= y_hat_pls #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[1,1] <- n
+n1
+bias
+out[1,2] <- MPE
+RPE
+out[1,3] <- R
+B1
+
+##measures of accuracy in validation
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= y_hat_pls_test1 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[1,4] <- n
+n1
+out[1,5] <- bias
+out[1,6] <- MPE
+out[1,7] <- R
+out[1,8] <- B1
+out[1,9] <- se.slope
+out[1,10] <- RPIQ
+############################################################################################
+###############################Apply Ridge Regression ######################################
+library(glmnet)
+#set lambda
+set.seed(123)
+lambdas_ridge <- 10^seq(-2, 2, length.out = 1000) 
+#TRAIN model
+ridge_cv <- cv.glmnet(x.train, y.train, alpha = 0, lambda = lambdas_ridge,
+                      standardize = TRUE, nfolds = 10)
+lambda_ridge_cv <- ridge_cv$lambda.min
+model_ridge_cv <- glmnet(x.train, y.train, alpha = 0, lambda = lambda_ridge_cv, standardize = TRUE)
+
+#Y hat in training 
+y_hat_ridge_cv <- predict(model_ridge_cv, x.train)
+
+# number of wavelength selected
+beta_ridge<-model_ridge_cv$beta
+Bot_ridge <- beta_ridge[which(model_ridge_cv$beta !=0),]
+Bot_ridge<-as.matrix(Bot_ridge)
+dim(Bot_ridge)
+nrow(Bot_ridge)
+
+#testing
+y_hat_ridge_cv_test_A1<-predict(model_ridge_cv, x.test)
+
+
+##measures of accuracy in calibration
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= y_hat_ridge_cv #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[1,11] <- n
+n1
+bias
+out[1,12] <- MPE
+RPE
+out[1,13] <- R
+B1
+
+
+##measures of accuracy in validation##
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= y_hat_ridge_cv_test_A1 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[1,14] <- n
+n1
+out[1,15] <- bias
+out[1,16] <- MPE
+out[1,17] <- R
+out[1,18] <- B1
+out[1,19] <- se.slope
+out[1,20] <- RPIQ
+##################################################################################
+###################################LASSO########################################## 
+#cross-validation to select lambda
+lambdas_lasso <- 10^seq(-3, 3, length.out = 1000)
+#TRAIN the lasso model
+lasso_cv <- cv.glmnet(x.train, y.train, alpha = 1, lambda = lambdas_lasso,
+                      standardize = TRUE, nfolds = 10)
+lambda_lasso_cv <- lasso_cv$lambda.min
+model_lasso_cv <- glmnet(x.train, y.train, alpha = 1, lambda = lambda_lasso_cv, standardize = TRUE)
+# ppredict y hat in calibration
+y_hat_lasso_cv <- predict(model_lasso_cv, x.train)
+# number of wavelengths selected
+beta_lasso1<-model_lasso_cv$beta
+Bot_lasso <- beta_lasso1[which(model_lasso_cv$beta !=0),] 
+Bot_lasso1<-as.matrix(Bot_lasso)
+dim(Bot_lasso)
+nrow(Bot_lasso)
+
+#test 
+y_hat_lasso_cv_test1 <- predict(model_lasso_cv, x.test)
+
+
+##measures of accuracy in calibration##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= y_hat_lasso_cv #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[1,21] <- n
+n1
+bias
+out[1,22] <- MPE
+RPE
+out[1,23] <- R
+B1
+
+
+##measures of accuracy in validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= y_hat_lasso_cv_test1 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[1,24] <- n
+n1
+out[1,25] <- bias
+out[1,26] <- MPE
+out[1,27] <- R
+out[1,28] <- B1
+out[1,29] <- se.slope
+out[1,30] <- RPIQ
+
+####################################################################################
+################################Apply Elastic Net###################################
+
+library(glmnet)
+# train the en model
+fit.elnet <- glmnet(x.train, y.train, family="gaussian", alpha=.5,intercept=FALSE)
+fit.elnet.cv <- cv.glmnet(x.train, y.train, type.measure="mse", alpha=.5,
+                          family="gaussian")
+fit.elnetLambda<-fit.elnet.cv$lambda.min
+fit.elnet2 <- glmnet(x.train, y.train, family="gaussian", alpha=.5, lambda =fit.elnetLambda, 
+                     intercept=FALSE)
+beta1<-fit.elnet2$beta
+# number of wavelengths selected
+Bot_en <- beta[which(fit.elnet2$beta1 !=0),] 
+Bot_en1<-as.matrix(Bot_en)
+dim(Bot_en)
+nrow(Bot_en)
+# y hat in calibration
+y_hat_en<-x.train%*%beta1
+
+# y hat in  validation
+y_hat_en_test1<-x.test%*%beta1
+
+
+##measures of accuracy in cross validation
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= y_hat_en #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[1,31] <- n
+n1
+bias
+out[1,32] <- MPE
+RPE
+out[1,33] <- R
+B1
+
+
+##measures of accuracy in validation##
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= y_hat_en_test1 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[1,34] <- n
+n1
+out[1,35] <- bias
+out[1,36] <- MPE
+out[1,37] <- R
+out[1,38] <- B1
+out[1,39] <- se.slope
+out[1,40] <- RPIQ
+##################################################################################
+############################### averaging model###################################
+
+library(broom)
+library(tidyverse)
+
+#evaluate y hat as average of regression models in calibration
+yhat_cv <- cbind(y_hat_lasso_cv, y_hat_en, y_hat_pls, y_hat_ridge_cv)
+yhat_cv <- as.matrix(yhat_cv)
+yhat_cv <- as.data.frame(yhat_cv)
+names(yhat_cv)[1] <- "lasso"
+names(yhat_cv)[2] <- "en"
+names(yhat_cv)[3] <- "pls"
+names(yhat_cv)[4] <- "ridge"
+yhat_cv <- transform(yhat_cv, lasso = as.numeric(lasso))
+yhat_cv <- transform(yhat_cv, en = as.numeric(en))
+yhat_cv <- transform(yhat_cv, pls = as.numeric(pls))
+yhat_cv <- transform(yhat_cv, ridge = as.numeric(ridge))
+yhat_cv1 <- apply(yhat_cv,1,mean)
+
+#evaluate y hat as average of regression models in validation
+yhat_cv_test <- cbind(y_hat_lasso_cv_test1, y_hat_en_test1, y_hat_pls_test1, y_hat_ridge_cv_test_A1)
+yhat_cv_test <- as.matrix(yhat_cv_test)
+yhat_cv_test <- as.data.frame(yhat_cv_test)
+names(yhat_cv_test)[1] <- "lasso"
+names(yhat_cv_test)[2] <- "en"
+names(yhat_cv_test)[3] <- "pls"
+names(yhat_cv_test)[4] <- "ridge"
+yhat_cv_test <- transform(yhat_cv_test, lasso = as.numeric(lasso))
+yhat_cv_test <- transform(yhat_cv_test, en = as.numeric(en))
+yhat_cv_test <- transform(yhat_cv_test, pls = as.numeric(pls))
+yhat_cv_test <- transform(yhat_cv_test, ridge = as.numeric(ridge))
+yhat_cv_test11 <- apply(yhat_cv_test,1,mean)
+
+
+##measures of accuracy in cross validation##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_cv1 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[1,41] <- n
+n1
+bias
+out[1,42] <- MPE
+RPE
+out[1,43] <- R
+B1
+
+##measures of accuracy in external validation##
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_cv_test11 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[1,44] <- n
+n1
+out[1,45] <- bias
+out[1,46] <- MPE
+out[1,47] <- R
+out[1,48] <- B1
+out[1,49] <- se.slope
+out[1,50] <- RPIQ
+
+#########################################################################################
+############## Principal Component Analysis #############################################
+library (pls)
+
+##train the model
+set.seed(123)
+pcr_mod <- pcr(y.train ~., data=train1, ncomp=20, scale=TRUE)
+summary(pcr_mod)
+
+#num.fact1 = selectNcomp(pcr_mod, method = c("onesigma"), ncomp = pcr_mod$ncomp)
+num.fact1=20
+
+##predict y hat in calibration
+yhat_pcr <- pcr_mod %>% predict(x.train, ncomp=num.fact1)               #predict y hat
+##predict y hat in validation
+yhat_test_pcr1 <- pcr_mod %>% predict(x.test, ncomp=num.fact1)     # predict y hat from test dataset
+
+
+##measures of accuracy cross validation##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_pcr #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[1,51] <- n
+n1
+bias
+out[1,52] <- MPE
+RPE
+out[1,53] <- R
+B1
+
+##measures of accuracy validation##
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_test_pcr1 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[1,54] <- n
+n1
+out[1,55] <- bias
+out[1,56] <- MPE
+out[1,57] <- R
+out[1,58] <- B1
+out[1,59] <- se.slope
+out[1,60] <- RPIQ
+
+#########################################################################################
+############## Projection Pursuit Regression ############################################
+library (stats)
+
+##trai the model
+set.seed(123)
+ppr_mod <- ppr(x.train, y.train, nterms=1, max.terms=2)
+ppr_plot <- plot(ppr_mod)
+## predict y calibration
+yhat_ppr <- ppr_mod %>% predict(x.train)               #predict y hat
+## predict y validation
+yhat_test_ppr1 <- ppr_mod %>% predict(x.test)     # predict y hat from test dataset
+
+
+
+##measures of accuracy in cross validation##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_ppr #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[1,61] <- n
+n1
+bias
+out[1,62] <- MPE
+RPE
+out[1,63] <- R
+B1
+
+##measures of accuracy in validation##
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_test_ppr1 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[1,64] <- n
+n1
+out[1,65] <- bias
+out[1,66] <- MPE
+out[1,67] <- R
+out[1,68] <- B1
+out[1,69] <- se.slope
+out[1,70] <- RPIQ
+
+#########################################################################################
+############## Spike and Slab Regression ################################################
+library (spikeslab)
+library (plyr)
+
+###train the model
+spikeslab_mod <- spikeslab (y.train ~., data = train1, max.var = 1000)
+## predict y in calibration
+yhat_spikeslab <- spikeslab_mod %>% predict(x.train)               #predict y hat
+yhat_spikeslab <- yhat_spikeslab$yhat.bma
+## predict y in validation
+yhat_test_spikeslab <- spikeslab_mod %>% predict(x.test)     # predict y hat from test dataset
+yhat_test_spikeslab1 <- yhat_test_spikeslab$yhat.bma
+
+# wavelengths selected by spike and slab
+attributes(spikeslab_mod)
+ssr1 <- spikeslab_mod$gnet
+length(spikeslab_mod$gnet)
+plot(spikeslab_mod$gnet, type="h")
+sum(spikeslab_mod$gnet == 0)
+ssr_bot1 <- as.data.frame(which(spikeslab_mod$gnet != 0))
+dim(ssr_bot)
+
+
+##define X and Y in cross validation##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_spikeslab #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[1,71] <- n
+n1
+bias
+out[1,72] <- MPE
+RPE
+out[1,73] <- R
+B1
+
+##define X and Y in external validation##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_test_spikeslab1 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[1,74] <- n
+n1
+out[1,75] <- bias
+out[1,76] <- MPE
+out[1,77] <- R
+out[1,78] <- B1
+out[1,79] <- se.slope
+out[1,80] <- RPIQ
+
+#############################################################################
+########################## Apply Random Forest###############################
+library(randomForest)
+
+##train the model
+y.train <- as.vector(train[-fold1,1])
+RF_mod1 <- randomForest (x= train[-fold1,-1], y= train[-fold1,1], ntree = 500, mtry = 40)   #model code
+
+## predict y
+yhat_RF <- predict (RF_mod1 , newdata= train[-fold1,-1])           #predict yhat CV
+yhat_RF <- as.matrix(yhat_RF)
+yhat_RF <- as.numeric(yhat_RF)
+yhat_RF_test <- predict (RF_mod1 , newdata = train[fold1,-1]) #predict yhat EV
+yhat_RF_test <- as.matrix(yhat_RF_test)
+yhat_RF_test1 <- as.numeric(yhat_RF_test)
+
+##measures of accuracy in cross validation##
+
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_RF #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[1,81] <- as.numeric(n)
+n1
+bias
+out[1,82] <-MPE
+RPE
+out[1,83] <-R
+B1
+
+
+##measures of accuracy in external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_RF_test1 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[1,84] <- n
+n1
+out[1,85] <- bias
+out[1,86] <- MPE
+out[1,87] <- R
+out[1,88] <- B1
+out[1,89] <- se.slope
+out[1,90] <- RPIQ
+
+############################################################################################
+############################## Boosting ####################################################
+
+library(gbm)
+##train the model
+boost2_mod <- gbm(y.train ~.,data = train1,distribution = "gaussian",n.trees = 500,
+                  shrinkage = 0.01, interaction.depth = 1)              #model code
+
+## predic y
+Xnew1 <- as.data.frame(x.train)
+Xnew1_test <- as.data.frame(x.test)
+yhat1_boosting<-predict(boost2_mod,Xnew1,n.trees = 500)             #predict y hat
+yhat1_test_boosting1<-predict(boost2_mod,Xnew1_test,n.trees = 500)   #predict y hat from test dataset
+
+
+##measures of accuracy in cross validation##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat1_boosting #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[1,91] <- n
+n1
+bias
+out[1,92] <- MPE
+RPE
+out[1,93] <- R
+B1
+
+
+##measures of accuracy in external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat1_test_boosting1 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[1,94] <- n
+n1
+out[1,95] <- bias
+out[1,96] <- MPE
+out[1,97] <- R
+out[1,98] <- B1
+out[1,99] <- se.slope
+out[1,100] <- RPIQ
+
+
+library(caret)
+
+#########################################################################################
+############## Bayesian regularization Neural Network #####################################
+library(brnn)
+##train model
+set.seed(123)
+brnn_mod <- brnn(x.train, y.train)
+
+###prediction
+yhat_brnn <- brnn_mod %>% predict(x.train)               #predict y hat
+yhat_test_brnn1 <- brnn_mod %>% predict(x.test)     # predict y hat from test dataset
+
+
+##measures of accuracy in cross validation##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_brnn #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[1,101] <- n
+n1
+bias
+out[1,102] <- MPE
+RPE
+out[1,103] <- R
+B1
+
+##measures of accuracy in cross validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_test_brnn1 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[1,104] <- n
+n1
+out[1,105] <- bias
+out[1,106] <- MPE
+out[1,107] <- R
+out[1,108] <- B1
+out[1,109] <- se.slope
+out[1,110] <- RPIQ
+
+##############################################################################
+############################################################################
+###############define x.train y.train x.test y.test#######################
+x.train = as.matrix(train[-fold2,-1])
+y.train = train[-fold2,1]
+x.test = as.matrix(train[fold2,-1])
+y.test= train [fold2,1]
+train1 <- as.data.frame(cbind(y.train, x.train))
+
+############################################################################################
+###################################### Apply PLS############################################
+library("pls")
+library(magrittr)
+library("parallel")
+
+# Generic code set up: put training and test x and y data into data frames
+train.pls = data.frame(y = y.train)
+train.pls$x = x.train
+test.pls = data.frame(y = y.test)
+test.pls$x = x.test
+
+# Fit a PLS regression to the training data
+# Use multiple cores for the CV if available
+pls.options(parallel = makeCluster(detectCores(), type = "PSOCK"))
+res.pls2 = plsr(y ~ x, ncomp=20, data = train.pls, validation = "LOO", scale = TRUE)
+stopCluster(pls.options()$parallel)
+
+#num.fact = selectNcomp(res.pls, method = c("onesigma"), ncomp = res.pls$ncomp)
+num.fact =12
+
+# Examine results through plots
+summary(res.pls2)   
+plot(RMSEP(res.pls2), legendpos = "topright",main="Fat Variable PLS")
+axis(side = 1, at=1:10)
+plot(res.pls2, ncomp = 4, asp = 1, line = TRUE, main="4  Component Fit")
+plot(res.pls2, plottype = "scores", comps = 1:4, main="Scores")
+plot(res.pls2, "loadings", comps = 1:4, legendpos = "bottomright", xlab = "spectrum", main="Fat Dataset 1: PLS Components")
+abline(h = 0)
+
+# Predict y hat in cross validation
+y_hat_pls = predict(res.pls2, ncomp = num.fact, newdata = train.pls$x)
+
+# Predict y hat in external validation
+y_hat_pls_test2 = predict(res.pls2, ncomp = num.fact, newdata = test.pls$x)
+
+
+##measures of accuracy
+##define X and Y
+
+x= y.train  #values of the character analysed eg fat_content#
+y= y_hat_pls #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[2,1] <- n
+n1
+bias
+out[2,2] <- MPE
+RPE
+out[2,3] <- R
+B1
+
+##measures of accuracy in validation
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= y_hat_pls_test2 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+
+out[2,4] <- n
+n1
+out[2,5] <- bias
+out[2,6] <- MPE
+out[2,7] <- R
+out[2,8] <- B1
+out[2,9] <- se.slope
+out[2,10] <- RPIQ
+###########################################################################################
+###############################Apply Ridge Regression ######################################
+library(glmnet)
+#set lambda
+set.seed(123)
+lambdas_ridge <- 10^seq(-2, 2, length.out = 1000) 
+#TRAIN model
+ridge_cv <- cv.glmnet(x.train, y.train, alpha = 0, lambda = lambdas_ridge,
+                      standardize = TRUE, nfolds = 10)
+lambda_ridge_cv <- ridge_cv$lambda.min
+model_ridge_cv <- glmnet(x.train, y.train, alpha = 0, lambda = lambda_ridge_cv, standardize = TRUE)
+
+#Y hat in cross validation
+y_hat_ridge_cv <- predict(model_ridge_cv, x.train)
+
+# number of wavelength selected
+beta_ridge<-model_ridge_cv$beta
+Bot_ridge <- beta_ridge[which(model_ridge_cv$beta !=0),]
+Bot_ridge<-as.matrix(Bot_ridge)
+dim(Bot_ridge)
+nrow(Bot_ridge)
+
+#test
+y_hat_ridge_cv_test_A2<-predict(model_ridge_cv, x.test)
+
+##measures of accuracy in calibration
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= y_hat_ridge_cv #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[2,11] <- n
+n1
+bias
+out[2,12] <- MPE
+RPE
+out[2,13] <- R
+B1
+
+
+##measures of accuracy in validation##
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= y_hat_ridge_cv_test_A2 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[2,14] <- n
+n1
+out[2,15] <- bias
+out[2,16] <- MPE
+out[2,17] <- R
+out[2,18] <- B1
+out[2,19] <- se.slope
+out[2,20] <- RPIQ
+##################################################################################
+###################################LASSO########################################## 
+#cross-validation to select lambda
+lambdas_lasso <- 10^seq(-3, 3, length.out = 1000)
+#TRAIN the lasso model
+lasso_cv <- cv.glmnet(x.train, y.train, alpha = 1, lambda = lambdas_lasso,
+                      standardize = TRUE, nfolds = 10)
+lambda_lasso_cv <- lasso_cv$lambda.min
+model_lasso_cv <- glmnet(x.train, y.train, alpha = 1, lambda = lambda_lasso_cv, standardize = TRUE)
+# ppredict y hat in cross validation
+y_hat_lasso_cv <- predict(model_lasso_cv, x.train)
+# number of wavelength selected
+beta_lasso2<-model_lasso_cv$beta
+Bot_lasso <- beta_lasso2[which(model_lasso_cv$beta !=0),] 
+Bot_lasso2<-as.matrix(Bot_lasso)
+dim(Bot_lasso)
+nrow(Bot_lasso)
+
+#test 
+y_hat_lasso_cv_test2 <- predict(model_lasso_cv, x.test)
+
+
+##measures of accuracy in calibration##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= y_hat_lasso_cv #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[2,21] <- n
+n1
+bias
+out[2,22] <- MPE
+RPE
+out[2,23] <- R
+B1
+
+
+##measures of accuracy in validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= y_hat_lasso_cv_test2 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[2,24] <- n
+n1
+out[2,25] <- bias
+out[2,26] <- MPE
+out[2,27] <- R
+out[2,28] <- B1
+out[2,29] <- se.slope
+out[2,30] <- RPIQ
+####################################################################################
+################################Apply Elastic Net###################################
+
+library(glmnet)
+# train the en model
+fit.elnet <- glmnet(x.train, y.train, family="gaussian", alpha=.5,intercept=FALSE)
+fit.elnet.cv <- cv.glmnet(x.train, y.train, type.measure="mse", alpha=.5,
+                          family="gaussian")
+fit.elnetLambda<-fit.elnet.cv$lambda.min
+fit.elnet2 <- glmnet(x.train, y.train, family="gaussian", alpha=.5, lambda =fit.elnetLambda, 
+                     intercept=FALSE)
+beta2<-fit.elnet2$beta
+# number of wavelength selected
+Bot_en <- beta2[which(fit.elnet2$beta !=0),] 
+Bot_en2<-as.matrix(Bot_en)
+dim(Bot_en)
+nrow(Bot_en)
+# y hat in cross validation
+y_hat_en<-x.train%*%beta2
+
+# y hat in external validation
+y_hat_en_test2<-x.test%*%beta2
+
+
+##measures of accuracy in cross validation
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= y_hat_en #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[2,31] <- n
+n1
+bias
+out[2,32] <- MPE
+RPE
+out[2,33] <- R
+B1
+
+
+##measures of accuracy in validation##
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= y_hat_en_test2 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[2,34] <- n
+n1
+out[2,35] <- bias
+out[2,36] <- MPE
+out[2,37] <- R
+out[2,38] <- B1
+out[2,39] <- se.slope
+out[2,40] <- RPIQ
+
+##################################################################################
+############################### averaging model###################################
+
+library(broom)
+library(tidyverse)
+
+#evaluate y hat as average of regression models in cross validation
+yhat_cv <- cbind(y_hat_lasso_cv, y_hat_en, y_hat_pls, y_hat_ridge_cv)
+yhat_cv <- as.matrix(yhat_cv)
+yhat_cv <- as.data.frame(yhat_cv)
+names(yhat_cv)[1] <- "lasso"
+names(yhat_cv)[2] <- "en"
+names(yhat_cv)[3] <- "pls"
+names(yhat_cv)[4] <- "ridge"
+yhat_cv <- transform(yhat_cv, lasso = as.numeric(lasso))
+yhat_cv <- transform(yhat_cv, en = as.numeric(en))
+yhat_cv <- transform(yhat_cv, pls = as.numeric(pls))
+yhat_cv <- transform(yhat_cv, ridge = as.numeric(ridge))
+yhat_cv1 <- apply(yhat_cv,1,mean)
+
+#evaluate y hat as average of regression models in external validation
+yhat_cv_test <- cbind(y_hat_lasso_cv_test2, y_hat_en_test2, y_hat_pls_test2, y_hat_ridge_cv_test_A2)
+yhat_cv_test <- as.matrix(yhat_cv_test)
+yhat_cv_test <- as.data.frame(yhat_cv_test)
+names(yhat_cv_test)[1] <- "lasso"
+names(yhat_cv_test)[2] <- "en"
+names(yhat_cv_test)[3] <- "pls"
+names(yhat_cv_test)[4] <- "ridge"
+yhat_cv_test <- transform(yhat_cv_test, lasso = as.numeric(lasso))
+yhat_cv_test <- transform(yhat_cv_test, en = as.numeric(en))
+yhat_cv_test <- transform(yhat_cv_test, pls = as.numeric(pls))
+yhat_cv_test <- transform(yhat_cv_test, ridge = as.numeric(ridge))
+yhat_cv_test12 <- apply(yhat_cv_test,1,mean)
+
+
+##measures of accuracy in cross validation##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_cv1 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[2,41] <- n
+n1
+bias
+out[2,42] <- MPE
+RPE
+out[2,43] <- R
+B1
+
+##measures of accuracy in external validation##
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_cv_test12 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[2,44] <- n
+n1
+out[2,45] <- bias
+out[2,46] <- MPE
+out[2,47] <- R
+out[2,48] <- B1
+out[2,49] <- se.slope
+out[2,50] <- RPIQ
+
+#########################################################################################
+############## Principal Component Analysis #############################################
+library (pls)
+
+##train the model
+set.seed(123)
+pcr_mod <- pcr(y.train ~., data=train1, ncomp=20, scale=TRUE)
+summary(pcr_mod)
+#num.fact = selectNcomp(pcr_mod, method = c("onesigma"), ncomp = pcr_mod$ncomp)
+num.fact1=20
+
+##predict y hat in calibration
+yhat_pcr <- pcr_mod %>% predict(x.train, ncomp=num.fact1)               #predict y hat
+##predict y hat in validation
+yhat_test_pcr2 <- pcr_mod %>% predict(x.test, ncomp=num.fact1)     # predict y hat from test dataset
+
+##measures of accuracy cross validation##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_pcr #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[2,51] <- n
+n1
+bias
+out[2,52] <- MPE
+RPE
+out[2,53] <- R
+B1
+
+##measures of accuracy validation##
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_test_pcr2 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[2,54] <- n
+n1
+out[2,55] <- bias
+out[2,56] <- MPE
+out[2,57] <- R
+out[2,58] <- B1
+out[2,59] <- se.slope
+out[2,60] <- RPIQ
+#########################################################################################
+############## Projection Pursuit Regression ############################################
+library (stats)
+
+##trai the model
+set.seed(123)
+ppr_mod <- ppr(x.train, y.train, nterms=1, max.terms=2)
+ppr_plot <- plot(ppr_mod)
+## predict y cross validation
+yhat_ppr <- ppr_mod %>% predict(x.train)               #predict y hat
+## predict y external validation
+yhat_test_ppr2 <- ppr_mod %>% predict(x.test)     # predict y hat from test dataset
+
+##measures of accuracy in cross validation##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_ppr #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[2,61] <- n
+n1
+bias
+out[2,62] <- MPE
+RPE
+out[2,63] <- R
+B1
+
+##measures of accuracy in validation##
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_test_ppr2 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[2,64] <- n
+n1
+out[2,65] <- bias
+out[2,66] <- MPE
+out[2,67] <- R
+out[2,68] <- B1
+out[2,69] <- se.slope
+out[2,70] <- RPIQ
+#########################################################################################
+############## Spike and Slab Regression ################################################
+library (spikeslab)
+library (plyr)
+
+###train the model
+spikeslab_mod <- spikeslab (y.train ~., data = train1, max.var = 1000)
+## predict y in corss validation
+yhat_spikeslab <- spikeslab_mod %>% predict(x.train)               #predict y hat
+yhat_spikeslab <- yhat_spikeslab$yhat.bma
+## predict y in external validation
+yhat_test_spikeslab <- spikeslab_mod %>% predict(x.test)     # predict y hat from test dataset
+yhat_test_spikeslab2 <- yhat_test_spikeslab$yhat.bma
+
+# wavelength selected by spike and slab
+attributes(spikeslab_mod)
+ssr2 <- spikeslab_mod$gnet
+length(spikeslab_mod$gnet)
+plot(spikeslab_mod$gnet, type="h")
+sum(spikeslab_mod$gnet == 0)
+ssr_bot2 <- as.data.frame(which(spikeslab_mod$gnet != 0))
+dim(ssr_bot)
+
+##define X and Y in cross validation##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_spikeslab #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[2,71] <- n
+n1
+bias
+out[2,72] <- MPE
+RPE
+out[2,73] <- R
+B1
+
+##define X and Y in external validation##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_test_spikeslab2 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[2,74] <- n
+n1
+out[2,75] <- bias
+out[2,76] <- MPE
+out[2,77] <- R
+out[2,78] <- B1
+out[2,79] <- se.slope
+out[2,80] <- RPIQ
+
+#############################################################################
+########################## Apply Random Forest###############################
+library(randomForest)
+
+##train the model
+y.train <- as.vector(y.train)
+RF_mod2 <- randomForest (x= x.train, y= y.train, ntree = 500, mtry = 40)   #model code
+
+## predict y
+yhat_RF <- predict (RF_mod2 , newdata= x.train)           #predict yhat CV
+yhat_RF <- as.matrix(yhat_RF)
+yhat_RF <- as.numeric(yhat_RF)
+yhat_RF_test <- predict (RF_mod2 , newdata = x.test) #predict yhat EV
+yhat_RF_test <- as.matrix(yhat_RF_test)
+yhat_RF_test2 <- as.numeric(yhat_RF_test)
+
+##measures of accuracy in cross validation##
+
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_RF #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[2,81] <- as.numeric(n)
+n1
+bias
+out[2,82] <-MPE
+RPE
+out[2,83] <-R
+B1
+
+rf.cv <- data.frame(n, n1, bias, MPE, RPE, R, B1)
+
+##measures of accuracy in external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_RF_test2 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[2,84] <- n
+n1
+out[2,85] <- bias
+out[2,86] <- MPE
+out[2,87] <- R
+out[2,88] <- B1
+out[2,89] <- se.slope
+out[2,90] <- RPIQ
+
+############################################################################################
+############################## Boosting ####################################################
+
+library(gbm)
+##train the model
+boost2_mod <- gbm(y.train ~.,data = train1,distribution = "gaussian",n.trees = 500,
+                  shrinkage = 0.01, interaction.depth = 1)              #model code
+
+## predic y
+Xnew1 <- as.data.frame(x.train)
+Xnew1_test <- as.data.frame(x.test)
+yhat1_boosting<-predict(boost2_mod,Xnew1,n.trees = 500)             #predict y hat
+yhat1_test_boosting2<-predict(boost2_mod,Xnew1_test,n.trees = 500)   #predict y hat from test dataset
+
+##measures of accuracy in cross validation##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat1_boosting #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[2,91] <- n
+n1
+bias
+out[2,92] <- MPE
+RPE
+out[2,93] <- R
+B1
+
+
+##measures of accuracy in external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat1_test_boosting2 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[2,94] <- n
+n1
+out[2,95] <- bias
+out[2,96] <- MPE
+out[2,97] <- R
+out[2,98] <- B1
+out[2,99] <- se.slope
+out[2,100] <- RPIQ
+
+#########################################################################################
+############## Bayesian regularization  Neural Network #####################################
+library(brnn)
+##train model
+set.seed(123)
+brnn_mod <- brnn(x.train, y.train)
+
+###prediction
+yhat_brnn <- brnn_mod %>% predict(x.train)               #predict y hat
+yhat_test_brnn2 <- brnn_mod %>% predict(x.test)     # predict y hat from test dataset
+
+##measures of accuracy in cross validation##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_brnn #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[2,101] <- n
+n1
+bias
+out[2,102] <- MPE
+RPE
+out[2,103] <- R
+B1
+
+##measures of accuracy in cross validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_test_brnn2 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[2,104] <- n
+n1
+out[2,105] <- bias
+out[2,106] <- MPE
+out[2,107] <- R
+out[2,108] <- B1
+out[2,109] <- se.slope
+out[2,110] <- RPIQ
+
+##############################################################################
+############################################################################
+###############define x.train y.train x.test y.test#######################
+x.train = as.matrix(train[-fold3,-1])
+y.train = train[-fold3,1]
+x.test = as.matrix(train[fold3,-1])
+y.test= train [fold3,1]
+train1 <- as.data.frame(cbind(y.train, x.train))
+############################################################################################
+###################################### Apply PLS############################################
+library("pls")
+library(magrittr)
+library("parallel")
+
+# Generic code set up: put training and test x and y data into data frames
+train.pls = data.frame(y = y.train)
+train.pls$x = x.train
+test.pls = data.frame(y = y.test)
+test.pls$x = x.test
+
+# Fit a PLS regression to the training data
+# Use multiple cores for the CV if available
+pls.options(parallel = makeCluster(detectCores(), type = "PSOCK"))
+res.pls3 = plsr(y ~ x, ncomp=20, data = train.pls, validation = "LOO", scale = TRUE)
+stopCluster(pls.options()$parallel)
+
+#num.fact = selectNcomp(res.pls, method = c("onesigma"), ncomp = res.pls$ncomp)
+num.fact =13
+
+# Examine results through plots
+summary(res.pls3)   
+plot(RMSEP(res.pls3), legendpos = "topright",main="Fat Variable PLS")
+axis(side = 1, at=1:10)
+plot(res.pls3, ncomp = 4, asp = 1, line = TRUE, main="4  Component Fit")
+plot(res.pls3, plottype = "scores", comps = 1:4, main="Scores")
+plot(res.pls3, "loadings", comps = 1:4, legendpos = "bottomright", xlab = "spectrum", main="Fat Dataset 1: PLS Components")
+abline(h = 0)
+
+# Predict y hat in cross validation
+y_hat_pls = predict(res.pls3, ncomp = num.fact, newdata = train.pls$x)
+
+# Predict y hat in external validation
+y_hat_pls_test3 = predict(res.pls3, ncomp = num.fact, newdata = test.pls$x)
+
+
+##measures of accuracy
+##define X and Y
+
+x= y.train  #values of the character analysed eg fat_content#
+y= y_hat_pls #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)
+
+out[3,1] <- n
+n1
+bias
+out[3,2] <- MPE
+RPE
+out[3,3] <- R
+B1
+
+##measures of accuracy in validation
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= y_hat_pls_test3 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)
+
+out[3,4] <- n
+n1
+out[3,5] <- bias
+out[3,6] <- MPE
+out[3,7] <- R
+out[3,8] <- B1
+out[3,9] <- se.slope
+out[3,10] <- RPIQ
+############################################################################################
+###############################Apply Ridge Regression ######################################
+library(glmnet)
+#set lambda
+set.seed(123)
+lambdas_ridge <- 10^seq(-2, 2, length.out = 1000) 
+#TRAIN model
+ridge_cv <- cv.glmnet(x.train, y.train, alpha = 0, lambda = lambdas_ridge,
+                      standardize = TRUE, nfolds = 10)
+lambda_ridge_cv <- ridge_cv$lambda.min
+model_ridge_cv <- glmnet(x.train, y.train, alpha = 0, lambda = lambda_ridge_cv, standardize = TRUE)
+
+#Y hat in cross validation
+y_hat_ridge_cv <- predict(model_ridge_cv, x.train)
+
+# number of wavelength selected
+beta_ridge<-model_ridge_cv$beta
+Bot_ridge <- beta_ridge[which(model_ridge_cv$beta !=0),]
+Bot_ridge<-as.matrix(Bot_ridge)
+dim(Bot_ridge)
+nrow(Bot_ridge)
+
+#test
+y_hat_ridge_cv_test_A3<-predict(model_ridge_cv, x.test)
+
+##measures of accuracy in calibration
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= y_hat_ridge_cv #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[3,11] <- n
+n1
+bias
+out[3,12] <- MPE
+RPE
+out[3,13] <- R
+B1
+
+
+##measures of accuracy in validation##
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= y_hat_ridge_cv_test_A3 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[3,14] <- n
+n1
+out[3,15] <- bias
+out[3,16] <- MPE
+out[3,17] <- R
+out[3,18] <- B1
+out[3,19] <- se.slope
+out[3,20] <- RPIQ
+##################################################################################
+###################################LASSO########################################## 
+#cross-validation to select lambda
+lambdas_lasso <- 10^seq(-3, 3, length.out = 1000)
+#TRAIN the lasso model
+lasso_cv <- cv.glmnet(x.train, y.train, alpha = 1, lambda = lambdas_lasso,
+                      standardize = TRUE, nfolds = 10)
+lambda_lasso_cv <- lasso_cv$lambda.min
+model_lasso_cv <- glmnet(x.train, y.train, alpha = 1, lambda = lambda_lasso_cv, standardize = TRUE)
+# ppredict y hat in cross validation
+y_hat_lasso_cv <- predict(model_lasso_cv, x.train)
+# number of wavelength selected
+beta_lasso3<-model_lasso_cv$beta
+Bot_lasso <- beta_lasso3[which(model_lasso_cv$beta !=0),] 
+Bot_lasso3<-as.matrix(Bot_lasso)
+dim(Bot_lasso)
+nrow(Bot_lasso)
+
+#test 
+y_hat_lasso_cv_test3 <- predict(model_lasso_cv, x.test)
+
+
+##measures of accuracy in calibration##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= y_hat_lasso_cv #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[3,21] <- n
+n1
+bias
+out[3,22] <- MPE
+RPE
+out[3,23] <- R
+B1
+
+
+##measures of accuracy in validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= y_hat_lasso_cv_test3 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[3,24] <- n
+n1
+out[3,25] <- bias
+out[3,26] <- MPE
+out[3,27] <- R
+out[3,28] <- B1
+out[3,29] <- se.slope
+out[3,30] <- RPIQ
+####################################################################################
+################################Apply Elastic Net###################################
+
+library(glmnet)
+# train the en model
+fit.elnet <- glmnet(x.train, y.train, family="gaussian", alpha=.5,intercept=FALSE)
+fit.elnet.cv <- cv.glmnet(x.train, y.train, type.measure="mse", alpha=.5,
+                          family="gaussian")
+fit.elnetLambda<-fit.elnet.cv$lambda.min
+fit.elnet2 <- glmnet(x.train, y.train, family="gaussian", alpha=.5, lambda =fit.elnetLambda, 
+                     intercept=FALSE)
+beta3<-fit.elnet2$beta
+# number of wavelength selected
+Bot_en <- beta3[which(fit.elnet2$beta !=0),] 
+Bot_en3<-as.matrix(Bot_en)
+dim(Bot_en)
+nrow(Bot_en)
+# y hat in cross validation
+y_hat_en<-x.train%*%beta3
+
+# y hat in external validation
+y_hat_en_test3<-x.test%*%beta3
+
+##measures of accuracy in cross validation
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= y_hat_en #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[3,31] <- n
+n1
+bias
+out[3,32] <- MPE
+RPE
+out[3,33] <- R
+B1
+
+
+##measures of accuracy in validation##
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= y_hat_en_test3 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[3,34] <- n
+n1
+out[3,35] <- bias
+out[3,36] <- MPE
+out[3,37] <- R
+out[3,38] <- B1
+out[3,39] <- se.slope
+out[3,40] <- RPIQ
+##################################################################################
+############################### averaging model###################################
+
+library(broom)
+library(tidyverse)
+
+#evaluate y hat as average of regression models in cross validation
+yhat_cv <- cbind(y_hat_lasso_cv, y_hat_en, y_hat_pls, y_hat_ridge_cv)
+yhat_cv <- as.matrix(yhat_cv)
+yhat_cv <- as.data.frame(yhat_cv)
+names(yhat_cv)[1] <- "lasso"
+names(yhat_cv)[2] <- "en"
+names(yhat_cv)[3] <- "pls"
+names(yhat_cv)[4] <- "ridge"
+yhat_cv <- transform(yhat_cv, lasso = as.numeric(lasso))
+yhat_cv <- transform(yhat_cv, en = as.numeric(en))
+yhat_cv <- transform(yhat_cv, pls = as.numeric(pls))
+yhat_cv <- transform(yhat_cv, ridge = as.numeric(ridge))
+yhat_cv1 <- apply(yhat_cv,1,mean)
+
+#evaluate y hat as average of regression models in external validation
+yhat_cv_test <- cbind(y_hat_lasso_cv_test3, y_hat_en_test3, y_hat_pls_test3, y_hat_ridge_cv_test_A3)
+yhat_cv_test <- as.matrix(yhat_cv_test)
+yhat_cv_test <- as.data.frame(yhat_cv_test)
+names(yhat_cv_test)[1] <- "lasso"
+names(yhat_cv_test)[2] <- "en"
+names(yhat_cv_test)[3] <- "pls"
+names(yhat_cv_test)[4] <- "ridge"
+yhat_cv_test <- transform(yhat_cv_test, lasso = as.numeric(lasso))
+yhat_cv_test <- transform(yhat_cv_test, en = as.numeric(en))
+yhat_cv_test <- transform(yhat_cv_test, pls = as.numeric(pls))
+yhat_cv_test <- transform(yhat_cv_test, ridge = as.numeric(ridge))
+yhat_cv_test13 <- apply(yhat_cv_test,1,mean)
+
+
+##measures of accuracy in cross validation##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_cv1 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[3,41] <- n
+n1
+bias
+out[3,42] <- MPE
+RPE
+out[3,43] <- R
+B1
+
+##measures of accuracy in external validation##
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_cv_test13 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[3,44] <- n
+n1
+out[3,45] <- bias
+out[3,46] <- MPE
+out[3,47] <- R
+out[3,48] <- B1
+out[3,49] <- se.slope
+out[3,50] <- RPIQ
+
+#########################################################################################
+############## Principal Component Analysis #############################################
+library (pls)
+
+##train the model
+set.seed(123)
+pcr_mod <- pcr(y.train ~., data=train1, ncomp=20, scale=TRUE)
+summary(pcr_mod)
+#num.fact = selectNcomp(pcr_mod, method = c("onesigma"), ncomp = pcr_mod$ncomp)
+num.fact1=20
+
+##predict y hat in calibration
+yhat_pcr <- pcr_mod %>% predict(x.train, ncomp=num.fact1)               #predict y hat
+##predict y hat in validation
+yhat_test_pcr3 <- pcr_mod %>% predict(x.test, ncomp=num.fact1)     # predict y hat from test dataset
+
+##measures of accuracy cross validation##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_pcr #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[3,51] <- n
+n1
+bias
+out[3,52] <- MPE
+RPE
+out[3,53] <- R
+B1
+
+##measures of accuracy validation##
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_test_pcr3 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[3,54] <- n
+n1
+out[3,55] <- bias
+out[3,56] <- MPE
+out[3,57] <- R
+out[3,58] <- B1
+out[3,59] <- se.slope
+out[3,60] <- RPIQ
+
+#########################################################################################
+############## Projection Pursuit Regression ############################################
+library (stats)
+
+##trai the model
+set.seed(123)
+ppr_mod <- ppr(x.train, y.train, nterms=1, max.terms=2)
+ppr_plot <- plot(ppr_mod)
+## predict y cross validation
+yhat_ppr <- ppr_mod %>% predict(x.train)               #predict y hat
+## predict y external validation
+yhat_test_ppr3 <- ppr_mod %>% predict(x.test)     # predict y hat from test dataset
+
+##measures of accuracy in cross validation##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_ppr #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[3,61] <- n
+n1
+bias
+out[3,62] <- MPE
+RPE
+out[3,63] <- R
+B1
+
+##measures of accuracy in validation##
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_test_ppr3 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[3,64] <- n
+n1
+out[3,65] <- bias
+out[3,66] <- MPE
+out[3,67] <- R
+out[3,68] <- B1
+out[3,69] <- se.slope
+out[3,70] <- RPIQ
+
+#########################################################################################
+############## Spike and Slab Regression ################################################
+library (spikeslab)
+library (plyr)
+
+###train the model
+spikeslab_mod <- spikeslab (y.train ~., data = train1, max.var = 1000)
+## predict y in corss validation
+yhat_spikeslab <- spikeslab_mod %>% predict(x.train)               #predict y hat
+yhat_spikeslab <- yhat_spikeslab$yhat.bma
+## predict y in external validation
+yhat_test_spikeslab <- spikeslab_mod %>% predict(x.test)     # predict y hat from test dataset
+yhat_test_spikeslab3 <- yhat_test_spikeslab$yhat.bma
+
+# wavelength selected by spike and slab
+attributes(spikeslab_mod)
+ssr3 <- spikeslab_mod$gnet
+length(spikeslab_mod$gnet)
+plot(spikeslab_mod$gnet, type="h")
+sum(spikeslab_mod$gnet == 0)
+ssr_bot3 <- as.data.frame(which(spikeslab_mod$gnet != 0))
+dim(ssr_bot)
+
+##define X and Y in cross validation##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_spikeslab #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[3,71] <- n
+n1
+bias
+out[3,72] <- MPE
+RPE
+out[3,73] <- R
+B1
+
+##define X and Y in external validation##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_test_spikeslab3 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[3,74] <- n
+n1
+out[3,75] <- bias
+out[3,76] <- MPE
+out[3,77] <- R
+out[3,78] <- B1
+out[3,79] <- se.slope
+out[3,80] <- RPIQ
+
+#############################################################################
+########################## Apply Random Forest###############################
+library(randomForest)
+
+##train the model
+y.train <- as.vector(y.train)
+RF_mod3 <- randomForest (x= x.train, y= y.train, ntree = 500, mtry = 40)   #model code
+
+## predict y
+yhat_RF <- predict (RF_mod3 , newdata= x.train)           #predict yhat CV
+yhat_RF <- as.matrix(yhat_RF)
+yhat_RF <- as.numeric(yhat_RF)
+yhat_RF_test <- predict (RF_mod3 , newdata = x.test) #predict yhat EV
+yhat_RF_test <- as.matrix(yhat_RF_test)
+yhat_RF_test3 <- as.numeric(yhat_RF_test)
+
+##measures of accuracy in cross validation##
+
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_RF #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[3,81] <- as.numeric(n)
+n1
+bias
+out[3,82] <-MPE
+RPE
+out[3,83] <-R
+B1
+
+rf.cv <- data.frame(n, n1, bias, MPE, RPE, R, B1)
+
+##measures of accuracy in external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_RF_test3 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[3,84] <- n
+n1
+out[3,85] <- bias
+out[3,86] <- MPE
+out[3,87] <- R
+out[3,88] <- B1
+out[3,89] <- se.slope
+out[3,90] <- RPIQ
+############################################################################################
+############################## Boosting ####################################################
+
+library(gbm)
+##train the model
+boost2_mod <- gbm(y.train ~.,data = train1,distribution = "gaussian",n.trees = 500,
+                  shrinkage = 0.01, interaction.depth = 1)              #model code
+
+## predic y
+Xnew1 <- as.data.frame(x.train)
+Xnew1_test <- as.data.frame(x.test)
+yhat1_boosting<-predict(boost2_mod,Xnew1,n.trees = 500)             #predict y hat
+yhat1_test_boosting3<-predict(boost2_mod,Xnew1_test,n.trees = 500)   #predict y hat from test dataset
+
+##measures of accuracy in cross validation##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat1_boosting #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+out[3,91] <- n
+n1
+bias
+out[3,92] <- MPE
+RPE
+out[3,93] <- R
+B1
+
+
+##measures of accuracy in external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat1_test_boosting3 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[3,94] <- n
+n1
+out[3,95] <- bias
+out[3,96] <- MPE
+out[3,97] <- R
+out[3,98] <- B1
+out[3,99] <- se.slope
+out[3,100] <- RPIQ
+
+
+#########################################################################################
+############## Bayesian regularization  Neural Network #####################################
+library(brnn)
+##train model
+set.seed(123)
+brnn_mod <- brnn(x.train, y.train)
+
+###prediction
+yhat_brnn <- brnn_mod %>% predict(x.train)               #predict y hat
+yhat_test_brnn3 <- brnn_mod %>% predict(x.test)     # predict y hat from test dataset
+
+##measures of accuracy in cross validation##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_brnn #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[3,101] <- n
+n1
+bias
+out[3,102] <- MPE
+RPE
+out[3,103] <- R
+B1
+
+##measures of accuracy in cross validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_test_brnn3 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[3,104] <- n
+n1
+out[3,105] <- bias
+out[3,106] <- MPE
+out[3,107] <- R
+out[3,108] <- B1
+out[3,109] <- se.slope
+out[3,110] <- RPIQ
+
+##############################################################################
+############################################################################
+###############define x.train y.train x.test y.test#######################
+x.train = as.matrix(train[-fold4,-1])
+y.train = train[-fold4,1]
+x.test = as.matrix(train[fold4,-1])
+y.test= train [fold4,1]
+train1 <- as.data.frame(cbind(y.train, x.train))
+############################################################################################
+###################################### Apply PLS############################################
+library("pls")
+library(magrittr)
+library("parallel")
+
+# Generic code set up: put training and test x and y data into data frames
+train.pls = data.frame(y = y.train)
+train.pls$x = x.train
+test.pls = data.frame(y = y.test)
+test.pls$x = x.test
+
+# Fit a PLS regression to the training data
+# Use multiple cores for the CV if available
+pls.options(parallel = makeCluster(detectCores(), type = "PSOCK"))
+res.pls4 = plsr(y ~ x, ncomp=20, data = train.pls, validation = "LOO", scale = TRUE)
+stopCluster(pls.options()$parallel)
+
+#num.fact = selectNcomp(res.pls, method = c("onesigma"), ncomp = res.pls$ncomp)
+num.fact =12
+
+# Examine results through plots
+summary(res.pls4)   
+plot(RMSEP(res.pls4), legendpos = "topright",main="Fat Variable PLS")
+axis(side = 1, at=1:10)
+plot(res.pls4, ncomp = 4, asp = 1, line = TRUE, main="4  Component Fit")
+plot(res.pls4, plottype = "scores", comps = 1:4, main="Scores")
+plot(res.pls4, "loadings", comps = 1:4, legendpos = "bottomright", xlab = "spectrum", main="Fat Dataset 1: PLS Components")
+abline(h = 0)
+
+# Predict y hat in cross validation
+y_hat_pls = predict(res.pls4, ncomp = num.fact, newdata = train.pls$x)
+
+# Predict y hat in external validation
+y_hat_pls_test4 = predict(res.pls4, ncomp = num.fact, newdata = test.pls$x)
+
+
+##measures of accuracy
+##define X and Y
+
+x= y.train  #values of the character analysed eg fat_content#
+y= y_hat_pls #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+
+out[4,1] <- n
+n1
+bias
+out[4,2] <- MPE
+RPE
+out[4,3] <- R
+B1
+
+##measures of accuracy in validation
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= y_hat_pls_test4 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+
+out[4,4] <- n
+n1
+out[4,5] <- bias
+out[4,6] <- MPE
+out[4,7] <- R
+out[4,8] <- B1
+out[4,9] <- se.slope
+out[4,10] <- RPIQ
+############################################################################################
+###############################Apply Ridge Regression ######################################
+library(glmnet)
+#set lambda
+set.seed(123)
+lambdas_ridge <- 10^seq(-2, 2, length.out = 1000) 
+#TRAIN model
+ridge_cv <- cv.glmnet(x.train, y.train, alpha = 0, lambda = lambdas_ridge,
+                      standardize = TRUE, nfolds = 10)
+lambda_ridge_cv <- ridge_cv$lambda.min
+model_ridge_cv <- glmnet(x.train, y.train, alpha = 0, lambda = lambda_ridge_cv, standardize = TRUE)
+
+#Y hat in cross validation
+y_hat_ridge_cv <- predict(model_ridge_cv, x.train)
+
+# number of wavelength selected
+beta_ridge<-model_ridge_cv$beta
+Bot_ridge <- beta_ridge[which(model_ridge_cv$beta !=0),]
+Bot_ridge<-as.matrix(Bot_ridge)
+dim(Bot_ridge)
+nrow(Bot_ridge)
+
+#test
+y_hat_ridge_cv_test_A4<-predict(model_ridge_cv, x.test)
+
+##measures of accuracy in calibration
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= y_hat_ridge_cv #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[4,11] <- n
+n1
+bias
+out[4,12] <- MPE
+RPE
+out[4,13] <- R
+B1
+
+
+##measures of accuracy in validation##
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= y_hat_ridge_cv_test_A4 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[4,14] <- n
+n1
+out[4,15] <- bias
+out[4,16] <- MPE
+out[4,17] <- R
+out[4,18] <- B1
+out[4,19] <- se.slope
+out[4,20] <- RPIQ
+##################################################################################
+###################################LASSO########################################## 
+#cross-validation to select lambda
+lambdas_lasso <- 10^seq(-3, 3, length.out = 1000)
+#TRAIN the lasso model
+lasso_cv <- cv.glmnet(x.train, y.train, alpha = 1, lambda = lambdas_lasso,
+                      standardize = TRUE, nfolds = 10)
+lambda_lasso_cv <- lasso_cv$lambda.min
+model_lasso_cv <- glmnet(x.train, y.train, alpha = 1, lambda = lambda_lasso_cv, standardize = TRUE)
+# ppredict y hat in cross validation
+y_hat_lasso_cv <- predict(model_lasso_cv, x.train)
+# number of wavelength selected
+beta_lasso4<-model_lasso_cv$beta
+Bot_lasso <- beta_lasso4[which(model_lasso_cv$beta !=0),] 
+Bot_lasso4<-as.matrix(Bot_lasso)
+dim(Bot_lasso)
+nrow(Bot_lasso)
+
+#test 
+y_hat_lasso_cv_test4 <- predict(model_lasso_cv, x.test)
+
+
+##measures of accuracy in calibration##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= y_hat_lasso_cv #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[4,21] <- n
+n1
+bias
+out[4,22] <- MPE
+RPE
+out[4,23] <- R
+B1
+
+
+##measures of accuracy in validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= y_hat_lasso_cv_test4 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[4,24] <- n
+n1
+out[4,25] <- bias
+out[4,26] <- MPE
+out[4,27] <- R
+out[4,28] <- B1
+out[4,29] <- se.slope
+out[4,30] <- RPIQ
+####################################################################################
+################################Apply Elastic Net###################################
+
+library(glmnet)
+# train the en model
+fit.elnet <- glmnet(x.train, y.train, family="gaussian", alpha=.5,intercept=FALSE)
+fit.elnet.cv <- cv.glmnet(x.train, y.train, type.measure="mse", alpha=.5,
+                          family="gaussian")
+fit.elnetLambda<-fit.elnet.cv$lambda.min
+fit.elnet2 <- glmnet(x.train, y.train, family="gaussian", alpha=.5, lambda =fit.elnetLambda, 
+                     intercept=FALSE)
+beta4<-fit.elnet2$beta
+# number of wavelength selected
+Bot_en <- beta4[which(fit.elnet2$beta !=0),] 
+Bot_en4<-as.matrix(Bot_en)
+dim(Bot_en)
+nrow(Bot_en)
+# y hat in cross validation
+y_hat_en<-x.train%*%beta4
+
+# y hat in external validation
+y_hat_en_test4<-x.test%*%beta4
+
+##measures of accuracy in cross validation
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= y_hat_en #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[4,31] <- n
+n1
+bias
+out[4,32] <- MPE
+RPE
+out[4,33] <- R
+B1
+
+
+##measures of accuracy in validation##
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= y_hat_en_test4 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[4,34] <- n
+n1
+out[4,35] <- bias
+out[4,36] <- MPE
+out[4,37] <- R
+out[4,38] <- B1
+out[4,39] <- se.slope
+out[4,40] <- RPIQ
+##################################################################################
+############################### averaging model###################################
+
+library(broom)
+library(tidyverse)
+
+#evaluate y hat as average of regression models in cross validation
+yhat_cv <- cbind(y_hat_lasso_cv, y_hat_en, y_hat_pls, y_hat_ridge_cv)
+yhat_cv <- as.matrix(yhat_cv)
+yhat_cv <- as.data.frame(yhat_cv)
+names(yhat_cv)[1] <- "lasso"
+names(yhat_cv)[2] <- "en"
+names(yhat_cv)[3] <- "pls"
+names(yhat_cv)[4] <- "ridge"
+yhat_cv <- transform(yhat_cv, lasso = as.numeric(lasso))
+yhat_cv <- transform(yhat_cv, en = as.numeric(en))
+yhat_cv <- transform(yhat_cv, pls = as.numeric(pls))
+yhat_cv <- transform(yhat_cv, ridge = as.numeric(ridge))
+yhat_cv1 <- apply(yhat_cv,1,mean)
+
+#evaluate y hat as average of regression models in external validation
+yhat_cv_test <- cbind(y_hat_lasso_cv_test4, y_hat_en_test4, y_hat_pls_test4, y_hat_ridge_cv_test_A4)
+yhat_cv_test <- as.matrix(yhat_cv_test)
+yhat_cv_test <- as.data.frame(yhat_cv_test)
+names(yhat_cv_test)[1] <- "lasso"
+names(yhat_cv_test)[2] <- "en"
+names(yhat_cv_test)[3] <- "pls"
+names(yhat_cv_test)[4] <- "ridge"
+yhat_cv_test <- transform(yhat_cv_test, lasso = as.numeric(lasso))
+yhat_cv_test <- transform(yhat_cv_test, en = as.numeric(en))
+yhat_cv_test <- transform(yhat_cv_test, pls = as.numeric(pls))
+yhat_cv_test <- transform(yhat_cv_test, ridge = as.numeric(ridge))
+yhat_cv_test14 <- apply(yhat_cv_test,1,mean)
+
+
+##measures of accuracy in cross validation##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_cv1 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[4,41] <- n
+n1
+bias
+out[4,42] <- MPE
+RPE
+out[4,43] <- R
+B1
+
+##measures of accuracy in external validation##
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_cv_test14 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[4,44] <- n
+n1
+out[4,45] <- bias
+out[4,46] <- MPE
+out[4,47] <- R
+out[4,48] <- B1
+out[4,49] <- se.slope
+out[4,50] <- RPIQ
+
+#########################################################################################
+############## Principal Component Analysis #############################################
+library (pls)
+
+##train the model
+set.seed(123)
+pcr_mod <- pcr(y.train ~., data=train1, ncomp=20, scale=TRUE)
+summary(pcr_mod)
+#num.fact = selectNcomp(pcr_mod, method = c("onesigma"), ncomp = pcr_mod$ncomp)
+num.fact1=20
+
+##predict y hat in calibration
+yhat_pcr <- pcr_mod %>% predict(x.train, ncomp=num.fact1)               #predict y hat
+##predict y hat in validation
+yhat_test_pcr4 <- pcr_mod %>% predict(x.test, ncomp=num.fact1)     # predict y hat from test dataset
+
+##measures of accuracy cross validation##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_pcr #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[4,51] <- n
+n1
+bias
+out[4,52] <- MPE
+RPE
+out[4,53] <- R
+B1
+
+##measures of accuracy validation##
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_test_pcr4 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[4,54] <- n
+n1
+out[4,55] <- bias
+out[4,56] <- MPE
+out[4,57] <- R
+out[4,58] <- B1
+out[4,59] <- se.slope
+out[4,60] <- RPIQ
+#########################################################################################
+############## Projection Pursuit Regression ############################################
+library (stats)
+
+##trai the model
+set.seed(123)
+ppr_mod <- ppr(x.train, y.train, nterms=1, max.terms=2)
+ppr_plot <- plot(ppr_mod)
+## predict y cross validation
+yhat_ppr <- ppr_mod %>% predict(x.train)               #predict y hat
+## predict y external validation
+yhat_test_ppr4 <- ppr_mod %>% predict(x.test)     # predict y hat from test dataset
+
+##measures of accuracy in cross validation##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_ppr #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[4,61] <- n
+n1
+bias
+out[4,62] <- MPE
+RPE
+out[4,63] <- R
+B1
+
+##measures of accuracy in validation##
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_test_ppr4 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[4,64] <- n
+n1
+out[4,65] <- bias
+out[4,66] <- MPE
+out[4,67] <- R
+out[4,68] <- B1
+out[4,69] <- se.slope
+out[4,70] <- RPIQ
+
+#########################################################################################
+############## Spike and Slab Regression ################################################
+library (spikeslab)
+library (plyr)
+
+###train the model
+spikeslab_mod <- spikeslab (y.train ~., data = train1, max.var = 1000)
+## predict y in corss validation
+yhat_spikeslab <- spikeslab_mod %>% predict(x.train)               #predict y hat
+yhat_spikeslab <- yhat_spikeslab$yhat.bma
+## predict y in external validation
+yhat_test_spikeslab <- spikeslab_mod %>% predict(x.test)     # predict y hat from test dataset
+yhat_test_spikeslab4 <- yhat_test_spikeslab$yhat.bma
+
+# wavelength selected by spike and slab
+attributes(spikeslab_mod)
+ssr4 <- spikeslab_mod$gnet
+length(spikeslab_mod$gnet)
+plot(spikeslab_mod$gnet, type="h")
+sum(spikeslab_mod$gnet == 0)
+ssr_bot4 <- as.data.frame(which(spikeslab_mod$gnet != 0))
+dim(ssr_bot)
+
+##define X and Y in cross validation##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_spikeslab #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[4,71] <- n
+n1
+bias
+out[4,72] <- MPE
+RPE
+out[4,73] <- R
+B1
+
+##define X and Y in external validation##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_test_spikeslab4 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[4,74] <- n
+n1
+out[4,75] <- bias
+out[4,76] <- MPE
+out[4,77] <- R
+out[4,78] <- B1
+out[4,79] <- se.slope
+out[4,80] <- RPIQ
+
+#############################################################################
+########################## Apply Random Forest###############################
+library(randomForest)
+
+##train the model
+y.train <- as.vector(y.train)
+RF_mod4 <- randomForest (x= x.train, y= y.train, ntree = 500, mtry = 40)   #model code
+
+## predict y
+yhat_RF <- predict (RF_mod4 , newdata= x.train)           #predict yhat CV
+yhat_RF <- as.matrix(yhat_RF)
+yhat_RF <- as.numeric(yhat_RF)
+yhat_RF_test <- predict (RF_mod4 , newdata = x.test) #predict yhat EV
+yhat_RF_test <- as.matrix(yhat_RF_test)
+yhat_RF_test4 <- as.numeric(yhat_RF_test)
+
+##measures of accuracy in cross validation##
+
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_RF #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[4,81] <- as.numeric(n)
+n1
+bias
+out[4,82] <-MPE
+RPE
+out[4,83] <-R
+B1
+
+
+##measures of accuracy in external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_RF_test4 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[4,84] <- n
+n1
+out[4,85] <- bias
+out[4,86] <- MPE
+out[4,87] <- R
+out[4,88] <- B1
+out[4,89] <- se.slope
+out[4,90] <- RPIQ
+############################################################################################
+############################## Boosting ####################################################
+
+library(gbm)
+##train the model
+boost2_mod <- gbm(y.train ~.,data = train1,distribution = "gaussian",n.trees = 500,
+                  shrinkage = 0.01, interaction.depth = 1)              #model code
+
+## predic y
+Xnew1 <- as.data.frame(x.train)
+Xnew1_test <- as.data.frame(x.test)
+yhat1_boosting<-predict(boost2_mod,Xnew1,n.trees = 500)             #predict y hat
+yhat1_test_boosting4<-predict(boost2_mod,Xnew1_test,n.trees = 500)   #predict y hat from test dataset
+
+##measures of accuracy in cross validation##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat1_boosting #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+se.slope <- out$coefficients[2 , 2]
+
+out[4,91] <- n
+n1
+bias
+out[4,92] <- MPE
+RPE
+out[4,93] <- R
+B1
+
+
+##measures of accuracy in external validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat1_test_boosting4 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[4,94] <- n
+n1
+out[4,95] <- bias
+out[4,96] <- MPE
+out[4,97] <- R
+out[4,98] <- B1
+out[4,99] <- se.slope
+out[4,100] <- RPIQ
+
+
+#########################################################################################
+############## Bayesian regularization  Neural Network #####################################
+library(brnn)
+##train model
+set.seed(123)
+brnn_mod <- brnn(x.train, y.train)
+
+###prediction
+yhat_brnn <- brnn_mod %>% predict(x.train)               #predict y hat
+yhat_test_brnn4 <- brnn_mod %>% predict(x.test)     # predict y hat from test dataset
+
+##measures of accuracy in cross validation##
+##define X and Y##
+
+x= y.train  #values of the character analysed eg fat_content#
+y= yhat_brnn #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))                 
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+
+out[4,101] <- n
+n1
+bias
+out[4,102] <- MPE
+RPE
+out[4,103] <- R
+B1
+
+##measures of accuracy in cross validation##
+
+##define X and Y##
+
+x= y.test  #values of the character analysed eg fat_content#
+y= yhat_test_brnn4 #values of the predicted eg fat_predicted#
+
+##
+n <- length(x)
+n1 = length(y)
+
+xbar = mean(x)
+covariance = (sum((x-mean(x))*(y-mean(y))))/(n-1)  #coavariance x,y
+varx = (sum((x-mean(x))**2))/(n-1)                 #variance x
+vary = (sum((y-mean(y))**2))/(n-1)                 #variance y
+bias = ((sum(x))/n)-((sum(y))/n1)
+resid = sum(x-y)
+SSE = sum((x-y)**2)
+MPSE = SSE / (n-1)                                 #Mean Square Prediction Error; Fuentes-Pila 1995
+MPE = sqrt (MPSE)                                  #Mean Prediction Error; Fuentes-Pila 1995
+R = covariance / (sqrt(varx*vary))
+lm <- lm(x ~ y)
+coef <- lm$coefficients
+Bo = as.numeric(coef[1])
+B1 = as.numeric(coef[2])
+summ <- summary(lm)
+se.slope <- summ$coefficients[2 , 2]
+RPIQ = rpiq_vec(x, y, na_rm = TRUE)                 #performance to inter-quantile 
+
+out[4,104] <- n
+n1
+out[4,105] <- bias
+out[4,106] <- MPE
+out[4,107] <- R
+out[4,108] <- B1
+out[4,109] <- se.slope
+out[4,110] <- RPIQ
+
+
+#########################################################################################
+########################################################################################
+########################results##########################################################
+
+apply(out, 2, summary)   #mean, max, min, and median of each predictors for each model
+boxplot(out)             #boxplot of the results
+apply(out, 2, sd)        #standard deviation of the results
+
+out <- as.data.frame(out)   #save the results table as data frame for export it
+
+library("writexl")
+write_xlsx(out,"direction/file name.xlsx")  #export the results in excel file
+
+#######################################################################
+#other interesting results
+
+#########################################################################
+#number of wavelenghts selected by the models
+#Lasso
+dim(Bot_lasso1)
+dim(Bot_lasso2)
+dim(Bot_lasso3)
+dim(Bot_lasso4)
+
+#EN
+dim(Bot_en1)
+dim(Bot_en2)
+dim(Bot_en3)
+dim(Bot_en4)
+
+#Spike and Slab
+dim(ssr_bot1)
+dim(ssr_bot2)
+dim(ssr_bot3)
+dim(ssr_bot4)
+
+#Variable importance in Random Forest
+rf1 <- importance(RF_mod1)
+rf2 <- importance(RF_mod2)
+rf3 <- importance(RF_mod3)
+rf4 <- importance(RF_mod4)
+
+#PLS coefficients
+coeff.pls1 <- coef(res.pls, ncomp = num.fact, intercept = F)
+coeff.pls2 <- coef(res.pls2, ncomp = num.fact, intercept = F)
+coeff.pls3 <- coef(res.pls3, ncomp = num.fact, intercept = F)
+coeff.pls4 <- coef(res.pls4, ncomp = num.fact, intercept = F)
+
+
+## output with the wavelengths coefficients for different model
+wave_out <- as.data.frame(cbind(as.vector(coeff.pls1), as.vector(beta_lasso1), as.vector(beta1), as.vector(ssr1),as.vector(rf1),
+                                as.vector(coeff.pls2), as.vector(beta_lasso2), as.vector(beta2), as.vector(ssr2),as.vector(rf2),
+                                as.vector(coeff.pls3), as.vector(beta_lasso3), as.vector(beta3), as.vector(ssr3),as.vector(rf3),
+                                as.vector(coeff.pls4), as.vector(beta_lasso4), as.vector(beta4), as.vector(ssr4),as.vector(rf4)))
+
+
+
+colnames(wave_out)[1] <- "pls1"
+colnames(wave_out)[2] <- "lasso1"
+colnames(wave_out)[3] <- "en1"
+colnames(wave_out)[4] <- "ssr1"
+colnames(wave_out)[5] <- "rf1"
+colnames(wave_out)[6] <- "pls2"
+colnames(wave_out)[7] <- "lasso2"
+colnames(wave_out)[8] <- "en2"
+colnames(wave_out)[9] <- "ssr2"
+colnames(wave_out)[10] <- "rf2"
+colnames(wave_out)[11] <- "pls3"
+colnames(wave_out)[12] <- "lasso3"
+colnames(wave_out)[13] <- "en3"
+colnames(wave_out)[14] <- "ssr3"
+colnames(wave_out)[15] <- "rf3"
+colnames(wave_out)[16] <- "pls4"
+colnames(wave_out)[17] <- "lasso4"
+colnames(wave_out)[18] <- "en4"
+colnames(wave_out)[19] <- "ssr4"
+colnames(wave_out)[20] <- "rf4"
+
+
+write_xlsx(wave_out,"direction/file name.xlsx")  #export the results in excel file
+
+
+#######################################################################
+## output predicted values
+n <- max(length(y_hat_pls_test1), length(y_hat_pls_test2), length(y_hat_pls_test3), length(y_hat_pls_test4))
+length(y_hat_pls_test1) <- n                      
+length(y_hat_pls_test2) <- n
+length(y_hat_pls_test3) <- n                      
+length(y_hat_pls_test4) <- n
+length(y_hat_ridge_cv_test_A1) <- n                      
+length(y_hat_ridge_cv_test_A2) <- n
+length(y_hat_ridge_cv_test_A3) <- n                      
+length(y_hat_ridge_cv_test_A4) <- n
+length(y_hat_lasso_cv_test1) <- n                      
+length(y_hat_lasso_cv_test2) <- n
+length(y_hat_lasso_cv_test3) <- n                      
+length(y_hat_lasso_cv_test4) <- n
+length(yhat_test_pcr1) <- n                      
+length(yhat_test_pcr2) <- n
+length(yhat_test_pcr3) <- n                      
+length(yhat_test_pcr4) <- n
+length(yhat_cv_test11) <- n                      
+length(yhat_cv_test12) <- n
+length(yhat_cv_test13) <- n                      
+length(yhat_cv_test14) <- n
+y_hat_en_test1 <- as.numeric(y_hat_en_test1)                      
+y_hat_en_test2 <- as.numeric(y_hat_en_test2)
+y_hat_en_test3 <- as.numeric(y_hat_en_test3)
+y_hat_en_test4 <- as.numeric(y_hat_en_test4)
+length(y_hat_en_test1) <- n                      
+length(y_hat_en_test2) <- n
+length(y_hat_en_test3) <- n                      
+length(y_hat_en_test4) <- n
+length(yhat_test_ppr1) <- n                      
+length(yhat_test_ppr2) <- n
+length(yhat_test_ppr3) <- n                      
+length(yhat_test_ppr4) <- n
+length(yhat_test_spikeslab1) <- n                      
+length(yhat_test_spikeslab2) <- n
+length(yhat_test_spikeslab3) <- n                      
+length(yhat_test_spikeslab4) <- n
+length(yhat_RF_test1) <- n                      
+length(yhat_RF_test2) <- n
+length(yhat_RF_test3) <- n                      
+length(yhat_RF_test4) <- n
+length(yhat1_test_boosting1) <- n                      
+length(yhat1_test_boosting2) <- n
+length(yhat1_test_boosting3) <- n                      
+length(yhat1_test_boosting4) <- n
+length(yhat_test_brnn1) <- n                      
+length(yhat_test_brnn2) <- n
+length(yhat_test_brnn3) <- n                      
+length(yhat_test_brnn4) <- n
+train1 <- (train [fold1,1])                     
+train2 <- (train [fold2,1])
+train3 <- (train [fold3,1])
+train4 <- (train [fold4,1])
+length(train1) <- n                      
+length(train2) <- n
+length(train3) <- n                      
+length(train4) <- n
+
+
+predicted.out <- as.data.frame(cbind(as.numeric(y_hat_pls_test1), as.numeric(y_hat_pls_test2), as.numeric(y_hat_pls_test3), as.numeric(y_hat_pls_test4),
+                                 as.numeric(y_hat_ridge_cv_test_A1), as.numeric(y_hat_ridge_cv_test_A2), as.numeric(y_hat_ridge_cv_test_A3), as.numeric(y_hat_ridge_cv_test_A4), 
+                                 as.numeric(y_hat_lasso_cv_test1), as.numeric(y_hat_lasso_cv_test2), as.numeric(y_hat_lasso_cv_test3), as.numeric(y_hat_lasso_cv_test4),
+                                 as.numeric(y_hat_en_test1), as.numeric(y_hat_en_test2), as.numeric(y_hat_en_test3), as.numeric(y_hat_en_test4),
+                                 as.numeric(yhat_cv_test11), as.numeric(yhat_cv_test12), as.numeric(yhat_cv_test13), as.numeric(yhat_cv_test14),
+                                 as.numeric(yhat_test_pcr1), as.numeric(yhat_test_pcr2), as.numeric(yhat_test_pcr3), as.numeric(yhat_test_pcr4),
+                                 as.numeric(yhat_test_ppr1), as.numeric(yhat_test_ppr2), as.numeric(yhat_test_ppr3), as.numeric(yhat_test_ppr4),
+                                 as.numeric(yhat_test_spikeslab1), as.numeric(yhat_test_spikeslab2), as.numeric(yhat_test_spikeslab3), as.numeric(yhat_test_spikeslab4),
+                                 as.numeric(yhat_RF_test1), as.numeric(yhat_RF_test2), as.numeric(yhat_RF_test3), as.numeric(yhat_RF_test4),
+                                 as.numeric(yhat1_test_boosting1), as.numeric(yhat1_test_boosting2), as.numeric(yhat1_test_boosting3), as.numeric(yhat1_test_boosting4),
+                                 as.numeric(yhat_test_brnn1), as.numeric(yhat_test_brnn2), as.numeric(yhat_test_brnn3), as.numeric(yhat_test_brnn4),
+                                 train1, train2, train3, train4))
+
+colnames(predicted.out)[1] <- "pls1"
+colnames(predicted.out)[2] <- "pls2"
+colnames(predicted.out)[3] <- "pls3"
+colnames(predicted.out)[4] <- "pls4"
+colnames(predicted.out)[5] <- "ridge1"
+colnames(predicted.out)[6] <- "ridge2"
+colnames(predicted.out)[7] <- "ridge3"
+colnames(predicted.out)[8] <- "ridge4"
+colnames(predicted.out)[9] <- "lasso1"
+colnames(predicted.out)[10] <- "lasso2"
+colnames(predicted.out)[11] <- "lasso3"
+colnames(predicted.out)[12] <- "lasso4"
+colnames(predicted.out)[13] <- "en1"
+colnames(predicted.out)[14] <- "en2"
+colnames(predicted.out)[15] <- "en3"
+colnames(predicted.out)[16] <- "en4"
+colnames(predicted.out)[17] <- "av1"
+colnames(predicted.out)[18] <- "av2"
+colnames(predicted.out)[19] <- "av3"
+colnames(predicted.out)[20] <- "av4"
+colnames(predicted.out)[21] <- "pcr1"
+colnames(predicted.out)[22] <- "pcr2"
+colnames(predicted.out)[23] <- "pcr3"
+colnames(predicted.out)[24] <- "pcr4"
+colnames(predicted.out)[25] <- "ppr1"
+colnames(predicted.out)[26] <- "ppr2"
+colnames(predicted.out)[27] <- "ppr3"
+colnames(predicted.out)[28] <- "ppr4"
+colnames(predicted.out)[29] <- "ssr1"
+colnames(predicted.out)[30] <- "ssr2"
+colnames(predicted.out)[31] <- "ssr3"
+colnames(predicted.out)[32] <- "ssr4"
+colnames(predicted.out)[33] <- "rf1"
+colnames(predicted.out)[34] <- "rf2"
+colnames(predicted.out)[35] <- "rf3"
+colnames(predicted.out)[36] <- "rf4"
+colnames(predicted.out)[37] <- "bo1"
+colnames(predicted.out)[38] <- "bo2"
+colnames(predicted.out)[39] <- "bo3"
+colnames(predicted.out)[40] <- "bo4"
+colnames(predicted.out)[41] <- "nn1"
+colnames(predicted.out)[42] <- "nn2"
+colnames(predicted.out)[43] <- "nn3"
+colnames(predicted.out)[44] <- "nn4"
+colnames(predicted.out)[45] <- "y1"
+colnames(predicted.out)[46] <- "y2"
+colnames(predicted.out)[47] <- "y3"
+colnames(predicted.out)[48] <- "y4"
+
+write_xlsx(predicted.out,"direction/file name.xlsx")  #export the results in excel file
