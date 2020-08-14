@@ -1,0 +1,1014 @@
+# Read in data if csv file
+
+rm(list=ls())
+setwd("set direction")
+list.files()
+
+dataset = read.csv("file name.csv")
+
+# Read in data if xlsx
+
+library("readxl")
+
+dataset = read_excel("set the direction/file name.xlsx")
+
+
+# Clean the dataset
+
+library("pls")
+library(glmnet)  # for ridge regression
+library(dplyr)   # for data cleaning
+library(psych)   # for function tr() to compute trace of a matrix
+library(penalized)
+
+## clean from outliers
+#Look at the regression code
+
+library(stats)
+##define the trait of interest (name present in the dataset) to analyse and remove the Na
+
+
+fold1<- which(dataset$.folds==1)
+fold2<- which(dataset$.folds==2)
+fold3<- which(dataset$.folds==3)
+fold4<- which(dataset$.folds==4)
+
+
+# Definition of brinary trait
+med = median(dataset$Heat_stability)
+
+dataset <- mutate(dataset, binary = (ifelse(Heat_stability <= med, 1, 0)))  ##CHANGE THE TRAIT HERE
+dataset$binary <- as.factor(dataset$binary)
+
+as.data.frame(table(dataset$binary))
+
+## definition of a table where report the results
+R <- 4
+out <- matrix(NA, R, 40)
+colnames(out) <- c("pls.n","sen", "spec", "auc", "acc","pls.n","sen", "spec", "auc", "acc",
+                   "rf.n","sen", "spec", "auc", "acc","pls.n","sen", "spec", "auc", "acc",
+                   "bo.n","sen", "spec", "auc", "acc","pls.n","sen", "spec", "auc", "acc",
+                   "svm.n","sen", "spec", "auc", "acc","pls.n","sen", "spec", "auc", "acc")
+
+
+###############################################################################
+#############################dataset1#########################################
+# Division in train and test
+
+training<-data.frame(dataset[-fold1,])
+testing<-data.frame(dataset[fold1,])
+
+
+# Generic code set up
+y.train = training$binary
+x.train = as.matrix(training[,61:591])
+train = cbind(y.train, x.train)
+y.test = testing$binary
+x.test = as.data.frame(testing[,61:591])
+test = cbind(y.test, x.test)
+train <- as.data.frame(train)
+test <- as.data.frame(test)
+names(train)[1] <- "binary"
+names(test)[1] <- "binary"
+y.train <- as.factor(y.train)
+y.test <- as.factor(y.test)
+train$binary <- as.factor(train$binary)
+test$binary <- as.factor(test$binary)
+
+library(mclust)
+library(caret)
+library(pROC)
+
+train <- mutate(train, binary = (ifelse(binary == 1, 0, 1)))
+#######################################################################################
+########################## Apply PLS DA#########################################
+
+plsda.model <- plsda(x.train, y.train, ncomp = 2, probMethod = "bayes")
+yhat_plsda <- predict (plsda.model , newdata= x.train)   #predict yhat
+yhat_plsda_test <- predict (plsda.model , newdata= x.test)   #predict yhat
+
+
+##measures of accuracy cross validation##
+
+##define X and Y##
+
+x= as.numeric(y.train)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat_plsda) #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[1,1] <- length(x)
+out[1,2] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[1,3] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[1,4] <- auc(roc_obj)
+out[1,5] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= as.numeric(y.test)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat_plsda_test) #values of the predicted eg fat_predicted#
+
+##
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[1,6] <- length(x)
+out[1,7] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[1,8] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[1,9] <- auc(roc_obj)
+out[1,10] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+
+
+
+#############################################################################
+########################## Apply Random Forest###############################
+library(randomForest)
+
+##train the model
+y.train <- as.factor(y.train)
+RF_mod <- randomForest (x= x.train, y= y.train, ntree = 500, mtry =23)   #model code
+
+## predict y
+yhat_RF <- predict (RF_mod , newdata= x.train)           #predict yhat CV
+yhat_RF <- as.matrix(yhat_RF)
+yhat_RF <- as.vector(yhat_RF)
+yhat_RF_test <- predict (RF_mod , newdata = x.test) #predict yhat EV
+yhat_RF_test <- as.matrix(yhat_RF_test)
+yhat_RF_test <- as.vector(yhat_RF_test)
+
+##measures of accuracy cross validation##
+
+##define X and Y##
+
+x= as.numeric(y.train)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat_RF) #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[1,11] <- length(x)
+out[1,12] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[1,13] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[1,14] <- auc(roc_obj)
+out[1,15] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= as.numeric(y.test)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat_RF_test) #values of the predicted eg fat_predicted#
+
+##
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[1,16] <- length(x)
+out[1,17] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[1,18] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[1,19] <- auc(roc_obj)
+out[1,20] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+############################################################################################
+############################## Boosting ####################################################
+
+library(gbm)
+##train the model
+boost2_mod <- gbm(binary ~.,data = train,n.trees = 500,
+                  shrinkage = 0.01, interaction.depth = 4)              #model code
+
+## predic y
+Xnew1 <- as.data.frame(x.train)
+Xnew1_test <- as.data.frame(x.test)
+yhat1_boosting<-predict.gbm(boost2_mod,Xnew1,n.trees = 500, type="response")             #predict y hat
+yhat1_test_boosting<-predict.gbm(boost2_mod,Xnew1_test,n.trees = 500, type="response")   #predict y hat from test dataset
+
+#define the threshold
+roc_objbo <- roc(y.train, yhat1_boosting)
+plot(roc_objbo)
+coorbo <- coords(roc_objbo, "best", "threshold", transpose = FALSE)
+taubo <- coorbo$threshold
+
+
+yhat1_boosting <- ifelse(yhat1_boosting < taubo, 0, 1)
+yhat1_test_boosting <- ifelse(yhat1_test_boosting < taubo, 0, 1)
+
+##measures of accuracy cross validation##
+
+##define X and Y##
+
+x= as.numeric(y.train)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat1_boosting) #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[1,21] <- length(x)
+out[1,22] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[1,23] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[1,24] <- auc(roc_obj)
+out[1,25] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= as.numeric(y.test)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat1_test_boosting) #values of the predicted eg fat_predicted#
+
+##
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[1,26] <- length(x)
+out[1,27] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[1,28] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[1,29] <- auc(roc_obj)
+out[1,30] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+###########################################################################################
+############################Support Vector Machine SVM#####################################
+library(e1071)
+
+classifier = svm(formula = binary ~.,  data = train, 
+                 type = 'C-classification', 
+                 kernel = 'linear')
+y_pred = predict(classifier, newdata = x.train)
+y_pred1 = predict(classifier, newdata = x.test)
+
+
+##measures of accuracy cross validation##
+
+##define X and Y##
+
+x= as.numeric(y.train)  #values of the character analysed eg fat_content#
+y= as.numeric(y_pred) #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[1,31] <- length(x)
+out[1,32] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[1,33] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[1,34] <- auc(roc_obj)
+out[1,35] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= as.numeric(y.test)  #values of the character analysed eg fat_content#
+y= as.numeric(y_pred1) #values of the predicted eg fat_predicted#
+
+##
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[1,36] <- length(x)
+out[1,37] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[1,38] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[1,39] <- auc(roc_obj)
+out[1,40] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+
+
+#######################################################################################
+#############################dataset2#########################################
+# Division in train and test
+
+training<-data.frame(dataset[-fold2,])
+testing<-data.frame(dataset[fold2,])
+
+
+# Generic code set up
+y.train = training$binary
+x.train = as.matrix(training[,61:591])
+train = cbind(y.train, x.train)
+y.test = testing$binary
+x.test = as.data.frame(testing[,61:591])
+test = cbind(y.test, x.test)
+train <- as.data.frame(train)
+test <- as.data.frame(test)
+names(train)[1] <- "binary"
+names(test)[1] <- "binary"
+y.train <- as.factor(y.train)
+y.test <- as.factor(y.test)
+train$binary <- as.factor(train$binary)
+test$binary <- as.factor(test$binary)
+
+library(mclust)
+library(caret)
+library(pROC)
+
+train <- mutate(train, binary = (ifelse(binary == 1, 0, 1)))
+#######################################################################################
+########################## Apply PLS DA#########################################
+
+plsda.model <- plsda(x.train, y.train, ncomp = 2, probMethod = "bayes")
+yhat_plsda <- predict (plsda.model , newdata= x.train)   #predict yhat
+yhat_plsda_test <- predict (plsda.model , newdata= x.test)   #predict yhat
+
+
+##measures of accuracy cross validation##
+
+##define X and Y##
+
+x= as.numeric(y.train)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat_plsda) #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[2,1] <- length(x)
+out[2,2] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[2,3] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[2,4] <- auc(roc_obj)
+out[2,5] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+pls.cal <- data.frame(ARI.pls, accuracy.pls)
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= as.numeric(y.test)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat_plsda_test) #values of the predicted eg fat_predicted#
+
+##
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[2,6] <- length(x)
+out[2,7] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[2,8] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[2,9] <- auc(roc_obj)
+out[2,10] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+#############################################################################
+########################## Apply Random Forest###############################
+library(randomForest)
+
+##train the model
+y.train <- as.factor(y.train)
+RF_mod <- randomForest (x= x.train, y= y.train, ntree = 500, mtry =23)   #model code
+
+## predict y
+yhat_RF <- predict (RF_mod , newdata= x.train)           #predict yhat CV
+yhat_RF <- as.matrix(yhat_RF)
+yhat_RF <- as.vector(yhat_RF)
+yhat_RF_test <- predict (RF_mod , newdata = x.test) #predict yhat EV
+yhat_RF_test <- as.matrix(yhat_RF_test)
+yhat_RF_test <- as.vector(yhat_RF_test)
+
+##measures of accuracy cross validation##
+
+##define X and Y##
+
+x= as.numeric(y.train)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat_RF) #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[2,11] <- length(x)
+out[2,12] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[2,13] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[2,14] <- auc(roc_obj)
+out[2,15] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= as.numeric(y.test)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat_RF_test) #values of the predicted eg fat_predicted#
+
+##
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[2,16] <- length(x)
+out[2,17] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[2,18] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[2,19] <- auc(roc_obj)
+out[2,20] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+############################################################################################
+############################## Boosting ####################################################
+
+library(gbm)
+##train the model
+boost2_mod <- gbm(binary ~.,data = train,n.trees = 500,
+                  shrinkage = 0.01, interaction.depth = 4)              #model code
+
+## predic y
+Xnew1 <- as.data.frame(x.train)
+Xnew1_test <- as.data.frame(x.test)
+yhat1_boosting<-predict.gbm(boost2_mod,Xnew1,n.trees = 500, type="response")             #predict y hat
+yhat1_test_boosting<-predict.gbm(boost2_mod,Xnew1_test,n.trees = 500, type="response")   #predict y hat from test dataset
+
+#define the threshold
+roc_objbo <- roc(y.train, yhat1_boosting)
+plot(roc_objbo)
+coorbo <- coords(roc_objbo, "best", "threshold", transpose = FALSE)
+taubo <- coorbo$threshold
+
+
+yhat1_boosting <- ifelse(yhat1_boosting < taubo, 0, 1)
+yhat1_test_boosting <- ifelse(yhat1_test_boosting < taubo, 0, 1)
+
+##measures of accuracy cross validation##
+
+##define X and Y##
+
+x= as.numeric(y.train)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat1_boosting) #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[2,21] <- length(x)
+out[2,22] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[2,23] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[2,24] <- auc(roc_obj)
+out[2,25] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= as.numeric(y.test)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat1_test_boosting) #values of the predicted eg fat_predicted#
+
+##
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[2,26] <- length(x)
+out[2,27] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[2,28] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[2,29] <- auc(roc_obj)
+out[2,30] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+###########################################################################################
+############################Support Vector Machine SVM#####################################
+library(e1071)
+
+classifier = svm(formula = binary ~.,  data = train, 
+                 type = 'C-classification', 
+                 kernel = 'linear')
+y_pred = predict(classifier, newdata = x.train)
+y_pred1 = predict(classifier, newdata = x.test)
+
+
+##measures of accuracy cross validation##
+
+##define X and Y##
+
+x= as.numeric(y.train)  #values of the character analysed eg fat_content#
+y= as.numeric(y_pred) #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[2,31] <- length(x)
+out[2,32] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[2,33] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[2,34] <- auc(roc_obj)
+out[2,35] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= as.numeric(y.test)  #values of the character analysed eg fat_content#
+y= as.numeric(y_pred1) #values of the predicted eg fat_predicted#
+
+##
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[2,36] <- length(x)
+out[2,37] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[2,38] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[2,39] <- auc(roc_obj)
+out[2,40] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+
+#######################################################################################
+#############################dataset3#########################################
+# Division in train and test
+
+training<-data.frame(dataset[-fold3,])
+testing<-data.frame(dataset[fold3,])
+
+
+# Generic code set up
+y.train = training$binary
+x.train = as.matrix(training[,61:591])
+train = cbind(y.train, x.train)
+y.test = testing$binary
+x.test = as.data.frame(testing[,61:591])
+test = cbind(y.test, x.test)
+train <- as.data.frame(train)
+test <- as.data.frame(test)
+names(train)[1] <- "binary"
+names(test)[1] <- "binary"
+y.train <- as.factor(y.train)
+y.test <- as.factor(y.test)
+train$binary <- as.factor(train$binary)
+test$binary <- as.factor(test$binary)
+
+library(mclust)
+library(caret)
+library(pROC)
+
+train <- mutate(train, binary = (ifelse(binary == 1, 0, 1)))
+#######################################################################################
+########################## Apply PLS DA#########################################
+
+plsda.model <- plsda(x.train, y.train, ncomp = 2, probMethod = "bayes")
+yhat_plsda <- predict (plsda.model , newdata= x.train)   #predict yhat
+yhat_plsda_test <- predict (plsda.model , newdata= x.test)   #predict yhat
+
+
+##measures of accuracy cross validation##
+
+##define X and Y##
+
+x= as.numeric(y.train)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat_plsda) #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[3,1] <- length(x)
+out[3,2] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[3,3] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[3,4] <- auc(roc_obj)
+out[3,5] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= as.numeric(y.test)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat_plsda_test) #values of the predicted eg fat_predicted#
+
+##
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[3,6] <- length(x)
+out[3,7] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[3,8] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[3,9] <- auc(roc_obj)
+out[3,10] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+#############################################################################
+########################## Apply Random Forest###############################
+library(randomForest)
+
+##train the model
+y.train <- as.factor(y.train)
+RF_mod <- randomForest (x= x.train, y= y.train, ntree = 500, mtry =23)   #model code
+
+## predict y
+yhat_RF <- predict (RF_mod , newdata= x.train)           #predict yhat CV
+yhat_RF <- as.matrix(yhat_RF)
+yhat_RF <- as.vector(yhat_RF)
+yhat_RF_test <- predict (RF_mod , newdata = x.test) #predict yhat EV
+yhat_RF_test <- as.matrix(yhat_RF_test)
+yhat_RF_test <- as.vector(yhat_RF_test)
+
+##measures of accuracy cross validation##
+
+##define X and Y##
+
+x= as.numeric(y.train)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat_RF) #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[3,11] <- length(x)
+out[3,12] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[3,13] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[3,14] <- auc(roc_obj)
+out[3,15] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= as.numeric(y.test)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat_RF_test) #values of the predicted eg fat_predicted#
+
+##
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[3,16] <- length(x)
+out[3,17] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[3,18] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[3,19] <- auc(roc_obj)
+out[3,20] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+############################################################################################
+############################## Boosting ####################################################
+
+library(gbm)
+##train the model
+boost2_mod <- gbm(binary ~.,data = train,n.trees = 500,
+                  shrinkage = 0.01, interaction.depth = 4)              #model code
+
+## predic y
+Xnew1 <- as.data.frame(x.train)
+Xnew1_test <- as.data.frame(x.test)
+yhat1_boosting<-predict.gbm(boost2_mod,Xnew1,n.trees = 500, type="response")             #predict y hat
+yhat1_test_boosting<-predict.gbm(boost2_mod,Xnew1_test,n.trees = 500, type="response")   #predict y hat from test dataset
+
+#define the threshold
+roc_objbo <- roc(y.train, yhat1_boosting)
+plot(roc_objbo)
+coorbo <- coords(roc_objbo, "best", "threshold", transpose = FALSE)
+taubo <- coorbo$threshold
+
+
+yhat1_boosting <- ifelse(yhat1_boosting < taubo, 0, 1)
+yhat1_test_boosting <- ifelse(yhat1_test_boosting < taubo, 0, 1)
+
+##measures of accuracy cross validation##
+
+##define X and Y##
+
+x= as.numeric(y.train)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat1_boosting) #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[3,21] <- length(x)
+out[3,22] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[3,23] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[3,24] <- auc(roc_obj)
+out[3,25] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= as.numeric(y.test)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat1_test_boosting) #values of the predicted eg fat_predicted#
+
+##
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[3,26] <- length(x)
+out[3,27] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[3,28] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[3,29] <- auc(roc_obj)
+out[3,30] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+###########################################################################################
+############################Support Vector Machine SVM#####################################
+library(e1071)
+
+classifier = svm(formula = binary ~.,  data = train, 
+                 type = 'C-classification', 
+                 kernel = 'linear')
+y_pred = predict(classifier, newdata = x.train)
+y_pred1 = predict(classifier, newdata = x.test)
+
+
+##measures of accuracy cross validation##
+
+##define X and Y##
+
+x= as.numeric(y.train)  #values of the character analysed eg fat_content#
+y= as.numeric(y_pred) #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[3,31] <- length(x)
+out[3,32] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[3,33] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[3,34] <- auc(roc_obj)
+out[3,35] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= as.numeric(y.test)  #values of the character analysed eg fat_content#
+y= as.numeric(y_pred1) #values of the predicted eg fat_predicted#
+
+##
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[3,36] <- length(x)
+out[3,37] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[3,38] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[3,39] <- auc(roc_obj)
+out[3,40] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+#######################################################################################
+#############################dataset4#########################################
+# Division in train and test
+
+training<-data.frame(dataset[-fold4,])
+testing<-data.frame(dataset[fold4,])
+
+
+# Generic code set up
+y.train = training$binary
+x.train = as.matrix(training[,61:591])
+train = cbind(y.train, x.train)
+y.test = testing$binary
+x.test = as.data.frame(testing[,61:591])
+test = cbind(y.test, x.test)
+train <- as.data.frame(train)
+test <- as.data.frame(test)
+names(train)[1] <- "binary"
+names(test)[1] <- "binary"
+y.train <- as.factor(y.train)
+y.test <- as.factor(y.test)
+train$binary <- as.factor(train$binary)
+test$binary <- as.factor(test$binary)
+
+library(mclust)
+library(caret)
+library(pROC)
+
+train <- mutate(train, binary = (ifelse(binary == 1, 0, 1)))
+#######################################################################################
+########################## Apply PLS DA#########################################
+
+plsda.model <- plsda(x.train, y.train, ncomp = 2, probMethod = "bayes")
+yhat_plsda <- predict (plsda.model , newdata= x.train)   #predict yhat
+yhat_plsda_test <- predict (plsda.model , newdata= x.test)   #predict yhat
+
+
+##measures of accuracy cross validation##
+
+##define X and Y##
+
+x= as.numeric(y.train)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat_plsda) #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[4,1] <- length(x)
+out[4,2] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[4,3] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[4,4] <- auc(roc_obj)
+out[4,5] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= as.numeric(y.test)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat_plsda_test) #values of the predicted eg fat_predicted#
+
+##
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[4,6] <- length(x)
+out[4,7] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[4,8] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[4,9] <- auc(roc_obj)
+out[4,10] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+#############################################################################
+########################## Apply Random Forest###############################
+library(randomForest)
+
+##train the model
+y.train <- as.factor(y.train)
+RF_mod <- randomForest (x= x.train, y= y.train, ntree = 500, mtry =23)   #model code
+
+## predict y
+yhat_RF <- predict (RF_mod , newdata= x.train)           #predict yhat CV
+yhat_RF <- as.matrix(yhat_RF)
+yhat_RF <- as.vector(yhat_RF)
+yhat_RF_test <- predict (RF_mod , newdata = x.test) #predict yhat EV
+yhat_RF_test <- as.matrix(yhat_RF_test)
+yhat_RF_test <- as.vector(yhat_RF_test)
+
+##measures of accuracy cross validation##
+
+##define X and Y##
+
+x= as.numeric(y.train)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat_RF) #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[4,11] <- length(x)
+out[4,12] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[4,13] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[4,14] <- auc(roc_obj)
+out[4,15] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= as.numeric(y.test)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat_RF_test) #values of the predicted eg fat_predicted#
+
+##
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[4,16] <- length(x)
+out[4,17] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[4,18] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[4,19] <- auc(roc_obj)
+out[4,20] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+############################################################################################
+############################## Boosting ####################################################
+
+library(gbm)
+##train the model
+boost2_mod <- gbm(binary ~.,data = train,n.trees = 500,
+                  shrinkage = 0.01, interaction.depth = 4)              #model code
+
+## predic y
+Xnew1 <- as.data.frame(x.train)
+Xnew1_test <- as.data.frame(x.test)
+yhat1_boosting<-predict.gbm(boost2_mod,Xnew1,n.trees = 500, type="response")             #predict y hat
+yhat1_test_boosting<-predict.gbm(boost2_mod,Xnew1_test,n.trees = 500, type="response")   #predict y hat from test dataset
+
+#define the threshold
+roc_objbo <- roc(y.train, yhat1_boosting)
+plot(roc_objbo)
+coorbo <- coords(roc_objbo, "best", "threshold", transpose = FALSE)
+taubo <- coorbo$threshold
+
+
+yhat1_boosting <- ifelse(yhat1_boosting < taubo, 0, 1)
+yhat1_test_boosting <- ifelse(yhat1_test_boosting < taubo, 0, 1)
+
+##measures of accuracy cross validation##
+
+##define X and Y##
+
+x= as.numeric(y.train)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat1_boosting) #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[4,21] <- length(x)
+out[4,22] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[4,23] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[4,24] <- auc(roc_obj)
+out[4,25] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= as.numeric(y.test)  #values of the character analysed eg fat_content#
+y= as.numeric(yhat1_test_boosting) #values of the predicted eg fat_predicted#
+
+##
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[4,26] <- length(x)
+out[4,27] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[4,28] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[4,29] <- auc(roc_obj)
+out[4,30] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+###########################################################################################
+############################Support Vector Machine SVM#####################################
+library(e1071)
+
+classifier = svm(formula = binary ~.,  data = train, 
+                 type = 'C-classification', 
+                 kernel = 'linear')
+y_pred = predict(classifier, newdata = x.train)
+y_pred1 = predict(classifier, newdata = x.test)
+
+
+##measures of accuracy cross validation##
+
+##define X and Y##
+
+x= as.numeric(y.train)  #values of the character analysed eg fat_content#
+y= as.numeric(y_pred) #values of the predicted eg fat_predicted#
+
+##
+
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[4,31] <- length(x)
+out[4,32] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[4,33] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[4,34] <- auc(roc_obj)
+out[4,35] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+##measures of accuracy external validation##
+
+##define X and Y##
+
+x= as.numeric(y.test)  #values of the character analysed eg fat_content#
+y= as.numeric(y_pred1) #values of the predicted eg fat_predicted#
+
+##
+table.pls <- as.data.frame(table(x,y))
+roc_obj <- roc(x, y)
+
+out[4,36] <- length(x)
+out[4,37] <- (table.pls[1, 3]/(table.pls[1, 3]+table.pls[3, 3]))
+out[4,38] <- (table.pls[4, 3]/(table.pls[4, 3]+table.pls[2, 3]))
+out[4,39] <- auc(roc_obj)
+out[4,40] <-accuracy.pls <- (table.pls[1, 3]+table.pls[4, 3])/(table.pls[1, 3]+table.pls[2, 3]+table.pls[3, 3]+table.pls[4, 3])
+
+
+#########################################################################################
+######################results#############################################################
+
+apply(out, 2, summary)
+boxplot(out)
+apply(out, 2, sd)
+
+out <- as.data.frame(out)
+
+library("writexl")
+write_xlsx(out,"direction/file name.xlsx")
